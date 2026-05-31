@@ -148,6 +148,10 @@ export function receiptLineToKotLine(r: PosReceiptLine) {
 /** Body fragment styles (full document + bold rules applied in Electron print wrapper). */
 const THERMAL_STYLE = `
   @page { size: 80mm auto; margin: 3mm; }
+  html {
+    color-scheme: light only;
+    background: #fff !important;
+  }
   * {
     box-sizing: border-box;
     font-weight: 700 !important;
@@ -155,7 +159,7 @@ const THERMAL_STYLE = `
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
-  body {
+  html, body {
     font-family: Arial, Helvetica, "Liberation Sans", sans-serif;
     font-size: 12px;
     font-weight: 700;
@@ -163,6 +167,8 @@ const THERMAL_STYLE = `
     margin: 0;
     padding: 8px;
     max-width: 72mm;
+    background: #fff !important;
+    color: #000 !important;
   }
   h1 { font-size: 16px; margin: 0 0 8px; font-weight: 700; text-align: center; }
   .pre { white-space: pre-wrap; font-size: 11px; margin: 4px 0; font-weight: 700; }
@@ -180,7 +186,7 @@ const THERMAL_STYLE = `
 export function wrapThermalPrintDocument(bodyHtml: string, title: string): string {
   const safeTitle = escapeHtml(title || "Receipt");
   const body = bodyHtml.replace(/<style>[\s\S]*?<\/style>/gi, "");
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>${safeTitle}</title><style>${THERMAL_STYLE}</style></head><body>${body}</body></html>`;
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><meta name="color-scheme" content="light only"/><title>${safeTitle}</title><style>${THERMAL_STYLE}</style></head><body>${body}</body></html>`;
 }
 
 export type PosBillPrintOptions = {

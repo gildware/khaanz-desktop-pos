@@ -631,6 +631,20 @@ function writeSilentPrinterNameToDb(db, deviceName) {
   );
 }
 
+async function waitForPrintDocumentReady(webContents) {
+  await webContents.executeJavaScript(`
+    new Promise((resolve) => {
+      const done = () => requestAnimationFrame(() => requestAnimationFrame(resolve));
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(done).catch(done);
+      } else {
+        done();
+      }
+    })
+  `);
+  await new Promise((r) => setTimeout(r, 400));
+}
+
 async function printSilentHtml({ html, title }) {
   const max = 600_000;
   if (!html || typeof html !== "string" || html.length > max) {
@@ -651,6 +665,7 @@ async function printSilentHtml({ html, title }) {
       show: false,
       width: 420,
       height: 1200,
+      backgroundColor: "#ffffff",
       webPreferences: { sandbox: false },
     });
 
@@ -691,7 +706,15 @@ async function printSilentHtml({ html, title }) {
 
     win.webContents.once("did-finish-load", async () => {
       try {
-        await new Promise((r) => setTimeout(r, 500));
+        await waitForPrintDocumentReady(win.webContents);
+        const hasText = await win.webContents.executeJavaScript(
+          `Boolean((document.body && document.body.innerText || "").trim().length)`,
+        );
+        if (!hasText) {
+          settle({ ok: false, error: "Receipt is empty — nothing to print." });
+          return;
+        }
+
         const configured = readSilentPrinterNameFromDb(db);
         const fromEnv = (process.env.KHAANZ_SILENT_PRINTER || "").trim();
         const deviceName = (fromEnv || configured).trim();
@@ -716,10 +739,12 @@ async function printSilentHtml({ html, title }) {
         win.webContents.print(
           {
             silent: true,
-            printBackground: true,
+            printBackground: false,
+            color: false,
             deviceName: chosen,
-            margins: { marginType: "none" },
+            margins: { marginType: "custom", top: 0, bottom: 0, left: 0, right: 0 },
             pageSize: { width: 80000, height: 300000 },
+            dpi: { horizontal: 203, vertical: 203 },
           },
           (success, failureReason) => {
             if (printSettled) return;

@@ -2,6 +2,10 @@
 
 const THERMAL_PRINT_STYLE = `
   @page { size: 80mm auto; margin: 3mm; }
+  html {
+    color-scheme: light only;
+    background: #fff !important;
+  }
   * {
     box-sizing: border-box;
     font-weight: 700 !important;
@@ -18,6 +22,8 @@ const THERMAL_PRINT_STYLE = `
     padding: 8px;
     width: 72mm;
     max-width: 72mm;
+    background: #fff !important;
+    color: #000 !important;
   }
   h1 {
     font-size: 16px;
@@ -77,9 +83,10 @@ function wrapThermalPrintDocument(bodyHtml, title) {
   const safeTitle = escapeHtml(title || "Receipt");
   const body = String(bodyHtml || "").replace(/<style>[\s\S]*?<\/style>/gi, "");
   return `<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8"/>
+<meta name="color-scheme" content="light only"/>
 <title>${safeTitle}</title>
 <style>${THERMAL_PRINT_STYLE}</style>
 </head>
