@@ -1,0 +1,49 @@
+const { contextBridge, ipcRenderer } = require("electron");
+
+function invoke(channel, args) {
+  return ipcRenderer.invoke(channel, args);
+}
+
+contextBridge.exposeInMainWorld("posDesktop", {
+  bootstrap: () => invoke("pos:bootstrap"),
+  listUsers: () => invoke("pos:listUsers"),
+  loginWithPin: (userId, pin) => invoke("pos:loginWithPin", { userId, pin }),
+  logout: (sessionId) => invoke("pos:logout", { sessionId }),
+  getSession: (sessionId) => invoke("pos:getSession", { sessionId }),
+  listMenuItems: (sessionId) => invoke("pos:listMenuItems", { sessionId }),
+  getMenuPayload: () => invoke("pos:getMenuPayload"),
+  getPosSettings: () => invoke("pos:getPosSettings"),
+  upsertMenuSnapshot: (sessionId, items) =>
+    invoke("pos:upsertMenuSnapshot", { sessionId, items }),
+  createOrder: (sessionId, items, fulfillment) =>
+    invoke("pos:createOrder", { sessionId, items, fulfillment }),
+  listRecentOrders: (sessionId, limit) =>
+    invoke("pos:listRecentOrders", { sessionId, limit }),
+});
+
+/**
+ * Desktop-only bridge: silent print, sync, offline order queue.
+ */
+contextBridge.exposeInMainWorld("khaanzDesktop", {
+  isDesktop: true,
+  printSilentHtml: (html, title) =>
+    invoke("khaanz:print-silent-html", { html, title }),
+  listPrinters: () => invoke("khaanz:list-printers"),
+  getSilentPrinter: () => invoke("khaanz:get-silent-printer"),
+  setSilentPrinter: (deviceName) => invoke("khaanz:set-silent-printer", deviceName),
+  enqueueOfflineOrder: (row) => invoke("khaanz:offline-enqueue", row),
+  getOfflineQueue: () => invoke("khaanz:offline-get"),
+  removeOfflineOrder: (clientOrderId) => invoke("khaanz:offline-remove", clientOrderId),
+  syncNow: () => invoke("khaanz:sync-now"),
+  checkConnectivity: () => invoke("khaanz:check-connectivity"),
+  getSyncStatus: () => invoke("khaanz:sync-status"),
+
+  // Desktop-only helpers used by the desktop POS fast-path.
+  placePosOrder: (clientOrderId, body) =>
+    invoke("khaanz:pos-place-order", { clientOrderId, body }),
+  listRecentPosOrders: () => invoke("khaanz:pos-list-recent-orders"),
+  getTodaySalesReport: () => invoke("khaanz:pos-today-report"),
+  updatePosOrderStatus: (orderId, status) =>
+    invoke("khaanz:pos-update-order-status", { orderId, status }),
+});
+
