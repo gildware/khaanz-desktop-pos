@@ -27,6 +27,7 @@
   "dependencies": {
     "better-sqlite3": "^11.10.0",
     "electron-updater": "^6.8.3",
+    "pdf-to-printer": "^5.8.0",
     "zod": "^4.1.5"
   },
   "build": {
@@ -56,6 +57,7 @@
     ],
     "asarUnpack": [
       "**/node_modules/better-sqlite3/**",
+      "**/node_modules/pdf-to-printer/**",
       "**/renderer/dist/**"
     ],
     "mac": {

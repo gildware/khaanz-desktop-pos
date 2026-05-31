@@ -267,8 +267,9 @@ export type KhaanzDesktopApi = {
     available: boolean;
     online: boolean;
     verified: boolean;
-    connected: boolean;
-    deviceName: string;
+        connected: boolean;
+        ready?: boolean;
+        deviceName: string;
     statusDetail?: string;
     printers: Array<{ name: string; isDefault?: boolean; status?: string }>;
     error?: string;

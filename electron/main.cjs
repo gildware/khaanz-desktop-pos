@@ -757,7 +757,8 @@ async function getPrinterConnectionStatus() {
     available: inList,
     online,
     verified,
-    connected: verified && online,
+    connected: Boolean(saved && (verified || online)),
+    ready: Boolean(saved),
     deviceName,
     statusDetail,
     printers: list.map((p) => ({
@@ -828,19 +829,15 @@ async function printReceiptText({ text, title }) {
   }
 
   if (process.platform === "win32") {
-    const onlineCheck = await isPrinterOnlineOnOs(saved);
-    const printName = onlineCheck.name || saved;
-    if (!onlineCheck.online) {
-      return {
-        ok: false,
-        error:
-          onlineCheck.detail ||
-          `“${saved}” is offline. Connect the printer in Windows, then Refresh.`,
-      };
-    }
-    const r = await printPlainTextWindows(printName, body, title || "Receipt");
-    if (r.ok && r.deviceName && r.deviceName !== saved) {
-      writeSilentPrinterNameToDb(db, r.deviceName);
+    const r = await printPlainTextWindows(saved, body, title || "Receipt");
+    if (r.ok) {
+      const verifiedName = r.deviceName || saved;
+      if (r.deviceName && r.deviceName !== saved) {
+        db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('silent_printer',?)").run(
+          verifiedName,
+        );
+      }
+      setPrinterVerified(db, verifiedName);
     }
     return r;
   }
@@ -1549,6 +1546,7 @@ function registerIpc() {
         online: false,
         verified: false,
         connected: false,
+        ready: false,
         deviceName: "",
         printers: [],
         error: String(e && e.message ? e.message : e),
@@ -1561,18 +1559,6 @@ function registerIpc() {
     if (!saved) {
       return { ok: false, error: "Select a printer and Save first." };
     }
-    const onlineCheck = await isPrinterOnlineOnOs(saved);
-    if (!onlineCheck.online) {
-      clearPrinterVerified(db);
-      return {
-        ok: false,
-        error:
-          onlineCheck.detail ||
-          `“${saved}” is offline or not plugged in. Connect it in Windows, then Refresh.`,
-      };
-    }
-    const printName =
-      process.platform === "win32" && onlineCheck.name ? onlineCheck.name : saved;
     const sample = buildTestPrintPlainText();
     const r = await printReceiptText({ text: sample, title: "Test print" });
     if (r.ok) {

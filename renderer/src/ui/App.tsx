@@ -221,7 +221,7 @@ export function App() {
     try {
       const status = await desktop.getPrinterStatus();
       if (status.ok) {
-        setPrinterReady(Boolean(status.saved && status.online));
+        setPrinterReady(Boolean(status.ready ?? status.saved));
         setPrinterConnected(Boolean(status.connected));
       } else {
         setPrinterConnected(false);
@@ -639,7 +639,8 @@ export function App() {
         return;
       }
       if (printMode !== "none" && !printerReady) {
-        setError("Connect printer, save BillQuick Lite (or your receipt printer), and run Test print.");
+        setError("Connect printer and save the same queue name you use in Petpooja.");
+        setPrinterDialogOpen(true);
         return;
       }
       if (fulfillment === "delivery" && !address.trim()) {
@@ -706,16 +707,20 @@ export function App() {
         }
         const orderRef = placed.orderRef;
         setLastBill({ orderRef });
-        setCart([]);
-        setNotes("");
-        setAddress("");
-        setLandmark("");
-        setDiscountInput("");
-        setDeliveryChargeInput("");
         setOrdersRefreshKey((k) => k + 1);
         void refreshSyncStatus();
 
+        const clearOrderForm = () => {
+          setCart([]);
+          setNotes("");
+          setAddress("");
+          setLandmark("");
+          setDiscountInput("");
+          setDeliveryChargeInput("");
+        };
+
         if (printMode === "none") {
+          clearOrderForm();
           setNotice(`Order ${orderRef} saved`);
           return;
         }
@@ -758,8 +763,10 @@ export function App() {
               desktop,
             );
           }
+          clearOrderForm();
           setNotice(`Order ${orderRef} saved and sent to printer`);
         } catch (printErr) {
+          clearOrderForm();
           const msg = printErr instanceof Error ? printErr.message : String(printErr);
           setError(`Order ${orderRef} saved, but print failed: ${msg}`);
           void refreshPrinterStatus();
@@ -1542,10 +1549,14 @@ export function App() {
                 </div>
               </div>
 
-              {notice ? (
-                <p className="break-words text-sm text-green-700 dark:text-green-400">{notice}</p>
-              ) : null}
-              {error ? <p className="break-words text-destructive text-sm">{error}</p> : null}
+              <div className="min-h-12 space-y-1">
+                {notice ? (
+                  <p className="break-words text-sm text-green-700 dark:text-green-400">{notice}</p>
+                ) : null}
+                {error ? (
+                  <p className="break-words text-destructive text-sm">{error}</p>
+                ) : null}
+              </div>
             </div>
           </footer>
         </aside>

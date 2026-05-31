@@ -4,6 +4,7 @@ const path = require("path");
 const { app } = require("electron");
 const { buildEscPosBuffer, buildPlainTextBuffer } = require("./escpos-buffer.cjs");
 const { printReceiptGdiWindows } = require("./print-gdi-windows.cjs");
+const { printReceiptPdfWindows } = require("./print-pdf-windows.cjs");
 
 function psQuote(s) {
   return `'${String(s).replace(/'/g, "''")}'`;
@@ -369,6 +370,7 @@ async function printPlainTextWindows(deviceName, text, title) {
 
   const name = resolved.name;
   const attempts = [
+    () => printReceiptPdfWindows(name, body, title || "Receipt"),
     () => printReceiptGdiWindows(name, body, title || "Receipt"),
     () => printViaCmdPrint(name, body),
     () => printTextRawWindows(name, body),
@@ -388,8 +390,8 @@ async function printPlainTextWindows(deviceName, text, title) {
   return {
     ok: false,
     error:
-      errors[0] ||
-      "All print methods failed. In Windows, pick the same printer Petpooja uses (e.g. BillQuick Lite), Save, then Test print.",
+      errors.filter(Boolean).join(" · ") ||
+      "All print methods failed. Use the same printer name as Petpooja, Save, then Test print.",
   };
 }
 

@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Loader2Icon, XIcon } from "lucide-react";
 
 type PrinterRow = { name: string; isDefault?: boolean };
@@ -10,6 +11,7 @@ type PrinterStatus = {
   online: boolean;
   verified: boolean;
   connected: boolean;
+  ready?: boolean;
   deviceName: string;
   statusDetail?: string;
   printers: PrinterRow[];
@@ -51,6 +53,11 @@ export function PrinterDialog({ open, onClose, onSaved }: Props) {
     setTestMessage("");
     setError("");
     void refresh();
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
   }, [open, refresh]);
 
   async function save() {
@@ -71,7 +78,7 @@ export function PrinterDialog({ open, onClose, onSaved }: Props) {
       }
       await refresh();
       onSaved();
-      setTestMessage("Printer saved. Run Test print to confirm it works.");
+      setTestMessage("Saved. Click Test print — receipt paper should come out.");
     } finally {
       setBusy(false);
     }
@@ -89,7 +96,7 @@ export function PrinterDialog({ open, onClose, onSaved }: Props) {
         await refresh();
         return;
       }
-      setTestMessage("Test print sent. If paper came out, you are ready for KOT/Bill.");
+      setTestMessage("Test print sent. Check your receipt printer now.");
       await refresh();
       onSaved();
     } finally {
@@ -101,110 +108,108 @@ export function PrinterDialog({ open, onClose, onSaved }: Props) {
 
   const selected = deviceName.trim();
   const selectedInList = Boolean(selected && printers.some((p) => p.name === selected));
-  const connected = Boolean(status?.connected);
   const saved = Boolean(status?.saved);
-  const online = Boolean(status?.online);
-  const verified = Boolean(status?.verified);
-  const showTestPrint = Boolean(saved && status?.online && selectedInList);
+  const showTestPrint = Boolean(selectedInList && (saved || selected));
 
-  let statusLine = "Select your receipt printer (e.g. BillQuick Lite), then Save.";
+  let statusLine = "Pick the same printer name as Petpooja, then Save.";
   let statusClass = "text-muted-foreground";
-  if (connected) {
-    statusLine = `Ready — ${status?.deviceName}`;
+  if (status?.connected) {
+    statusLine = `Ready — ${status.deviceName}`;
     statusClass = "text-emerald-600 dark:text-emerald-400";
-  } else if (saved && !online) {
-    statusLine =
-      status?.statusDetail ||
-      `${status?.deviceName} is saved but offline. Plug in the printer or turn it on, then Refresh.`;
-    statusClass = "text-destructive";
-  } else if (saved && online && !verified) {
-    statusLine = `${status?.deviceName} saved — run Test print to mark as connected.`;
-    statusClass = "text-amber-700 dark:text-amber-400";
   } else if (saved) {
-    statusLine = `${status?.deviceName} saved — not verified yet.`;
-    statusClass = "text-muted-foreground";
+    statusLine = `${status.deviceName} saved — run Test print.`;
+    statusClass = "text-amber-700 dark:text-amber-400";
   }
 
   const receiptHint =
     selected && !isLikelyReceiptPrinter(selected)
-      ? "This looks like an office printer, not a receipt printer. Choose BillQuick Lite or your 80mm thermal queue."
+      ? "Warning: this looks like an office/PDF printer. Use BillQuick Lite or your 80mm thermal queue."
       : null;
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      onClick={onClose}
+      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 p-4"
+      role="presentation"
+      onMouseDown={onClose}
     >
       <div
         role="dialog"
         aria-modal="true"
-        className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-xl border bg-background shadow-lg"
-        onClick={(e) => e.stopPropagation()}
+        aria-labelledby="printer-dialog-title"
+        className="flex max-h-[min(90vh,640px)] w-full max-w-md flex-col overflow-hidden rounded-xl border bg-background shadow-2xl"
+        onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="shrink-0 border-b px-5 py-4">
+        <header className="shrink-0 space-y-2 border-b px-5 py-4">
           <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0 space-y-1">
-              <h2 className="font-semibold text-lg leading-tight">Connect printer</h2>
-              <p className="text-muted-foreground text-sm leading-snug">
-                Select the <strong>same printer name</strong> you use in Petpooja (e.g. BillQuick
-                Lite) — not HP/PDF printers.
+            <div className="min-w-0 flex-1">
+              <h2 id="printer-dialog-title" className="font-semibold text-lg leading-tight">
+                Connect printer
+              </h2>
+              <p className="mt-1 text-muted-foreground text-sm leading-normal">
+                Same queue name as Petpooja (e.g. BillQuick Lite).
               </p>
             </div>
-            <button type="button" onClick={onClose} className="shrink-0 rounded-md border p-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="shrink-0 rounded-md border p-2"
+              aria-label="Close"
+            >
               <XIcon className="size-4" />
             </button>
           </div>
+          <p className={`break-words text-sm leading-normal ${statusClass}`}>{statusLine}</p>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          <div className="space-y-4">
+            {printers.length === 0 ? (
+              <p className="text-muted-foreground text-sm leading-normal">
+                No printers found. Connect USB, install driver, then Refresh.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                <label htmlFor="pos-printer-select" className="block font-medium text-sm">
+                  Printer
+                </label>
+                <select
+                  id="pos-printer-select"
+                  value={deviceName}
+                  onChange={(e) => {
+                    setDeviceName(e.target.value);
+                    setTestMessage("");
+                    setError("");
+                  }}
+                  className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                >
+                  <option value="">Select printer…</option>
+                  {printers.map((p) => (
+                    <option key={p.name} value={p.name}>
+                      {p.name}
+                      {p.isDefault ? " (default)" : ""}
+                    </option>
+                  ))}
+                </select>
+                {receiptHint ? (
+                  <p className="text-amber-800 text-xs leading-normal dark:text-amber-300">
+                    {receiptHint}
+                  </p>
+                ) : null}
+              </div>
+            )}
+
+            {error ? (
+              <p className="break-words text-destructive text-sm leading-normal">{error}</p>
+            ) : null}
+            {testMessage ? (
+              <p className="break-words text-emerald-700 text-sm leading-normal dark:text-emerald-400">
+                {testMessage}
+              </p>
+            ) : null}
+          </div>
         </div>
 
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
-          <p className={`break-words text-sm leading-relaxed ${statusClass}`}>{statusLine}</p>
-
-          {printers.length === 0 ? (
-            <p className="text-muted-foreground text-sm leading-relaxed">
-              No printers detected. Install the thermal driver in Windows, connect USB, then Refresh.
-            </p>
-          ) : (
-            <div className="space-y-2">
-              <label htmlFor="pos-printer-select" className="block font-medium text-sm">
-                Printer
-              </label>
-              <select
-                id="pos-printer-select"
-                value={deviceName}
-                onChange={(e) => {
-                  setDeviceName(e.target.value);
-                  setTestMessage("");
-                  setError("");
-                }}
-                className="h-10 w-full rounded-md border bg-background px-3 text-sm"
-              >
-                <option value="">Select printer…</option>
-                {printers.map((p) => (
-                  <option key={p.name} value={p.name}>
-                    {p.name}
-                    {p.isDefault ? " (Windows default)" : ""}
-                  </option>
-                ))}
-              </select>
-              {receiptHint ? (
-                <p className="text-amber-800 text-xs leading-relaxed dark:text-amber-300">
-                  {receiptHint}
-                </p>
-              ) : null}
-            </div>
-          )}
-
-          {error ? (
-            <p className="break-words text-destructive text-sm leading-relaxed">{error}</p>
-          ) : null}
-          {testMessage ? (
-            <p className="break-words text-emerald-700 text-sm leading-relaxed dark:text-emerald-400">
-              {testMessage}
-            </p>
-          ) : null}
-        </div>
-
-        <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t bg-muted/20 px-5 py-4">
+        <footer className="flex shrink-0 flex-wrap justify-end gap-2 border-t bg-muted/30 px-5 py-4">
           <button
             type="button"
             onClick={() => void refresh()}
@@ -233,8 +238,9 @@ export function PrinterDialog({ open, onClose, onSaved }: Props) {
             {busy ? <Loader2Icon className="size-4 animate-spin" /> : null}
             Save printer
           </button>
-        </div>
+        </footer>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
