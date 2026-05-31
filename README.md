@@ -93,7 +93,8 @@ Pushing to **`main`** or tagging **`v*`** runs [`.github/workflows/release.yml`]
 
 - **macOS:** `.dmg` + `.zip` (zip is used for in-app auto-update)
 - **Windows:** NSIS `.exe` + `.zip`
-- Each `main` push gets version `0.1.<run-number>` so installed apps can update via `electron-updater`
+- Each `main` push gets version `0.1.<run-number>` and tag `v0.1.<run-number>` on GitHub Releases
+- Installed apps auto-update via `electron-updater` (uses the `latest*.yml` files attached to each release)
 
 Packaged apps check GitHub for updates on startup (and via `khaanzDesktop.checkForUpdates()`).
 

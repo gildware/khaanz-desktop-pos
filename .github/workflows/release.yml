@@ -27,6 +27,9 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,12 +43,8 @@ jobs:
             package-lock.json
             renderer/package-lock.json
 
-      - name: Install dependencies
-        run: |
-          npm ci
-          npm --prefix renderer ci
-
       - name: Set release version
+        id: version
         shell: bash
         run: |
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
@@ -53,13 +52,74 @@ jobs:
           else
             VER="0.1.${{ github.run_number }}"
           fi
-          echo "RELEASE_VERSION=$VER" >> "$GITHUB_ENV"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
           npm version "$VER" --no-git-tag-version --allow-same-version
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm --prefix renderer ci
 
       - name: Rebuild native modules for Electron
         run: npm run rebuild:electron
 
-      - name: Build renderer and publish installers
+      - name: Build installers
+        run: npm run dist -- --${{ matrix.platform }}
+
+      - name: Upload platform artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pos-${{ matrix.platform }}
+          path: release/
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VER="${GITHUB_REF_NAME#v}"
+          else
+            VER="0.1.${{ github.run_number }}"
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VER}" >> "$GITHUB_OUTPUT"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Prepare release files
+        run: |
+          mkdir -p upload
+          find artifacts -type f \( \
+            -iname '*.dmg' -o \
+            -iname '*.exe' -o \
+            -iname '*.zip' -o \
+            -iname '*.yml' -o \
+            -iname '*.blockmap' \
+          \) -exec cp {} upload/ \;
+          echo "Release files:"
+          ls -la upload/
+
+      - name: Fail if no installers were built
+        run: test "$(find upload -type f | wc -l)" -gt 0
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Khaanz POS ${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: upload/*
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run dist:publish -- --${{ matrix.platform }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
