@@ -6,6 +6,11 @@ function invoke(channel, args) {
 
 contextBridge.exposeInMainWorld("posDesktop", {
   bootstrap: () => invoke("pos:bootstrap"),
+  getBackendConfig: () => invoke("pos:get-backend-config"),
+  saveBackendConfig: (apiOrigin, syncKey) =>
+    invoke("pos:save-backend-config", { apiOrigin, syncKey }),
+  testBackendConfig: (apiOrigin, syncKey) =>
+    invoke("pos:test-backend-config", { apiOrigin, syncKey }),
   listUsers: () => invoke("pos:listUsers"),
   loginWithPin: (userId, pin) => invoke("pos:loginWithPin", { userId, pin }),
   logout: (sessionId) => invoke("pos:logout", { sessionId }),

@@ -161,6 +161,34 @@ export type PosDesktopApi = {
       }
     | { ok: false; error: string }
   >;
+  getBackendConfig: () => Promise<
+    | {
+        ok: true;
+        apiOrigin: string;
+        syncKey: string;
+        configured: boolean;
+        userDataEnvPath: string;
+        hasStoredFile?: boolean;
+      }
+    | { ok: false; error: string }
+  >;
+  saveBackendConfig: (
+    apiOrigin: string,
+    syncKey: string,
+  ) => Promise<
+    | {
+        ok: true;
+        apiOrigin: string;
+        syncConfigured: boolean;
+        userDataEnvPath?: string;
+        lastMenuPullAt?: string | null;
+      }
+    | { ok: false; error: string }
+  >;
+  testBackendConfig: (
+    apiOrigin: string,
+    syncKey: string,
+  ) => Promise<{ ok: true; online: boolean; apiOrigin: string } | { ok: false; error: string }>;
   listUsers: () => Promise<{ ok: true; users: Array<{ id: string; displayName: string; role: string }> }>;
   loginWithPin: (
     userId: string,

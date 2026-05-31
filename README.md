@@ -74,19 +74,14 @@ Server endpoints:
 - `POST /api/pos-sync/push`
 - `GET /api/pos-sync/pull`
 
-For a **packaged** desktop build (installed `.dmg` / `.exe`), create `.env` in the app **user data** folder (loaded on startup). The app shows this path on the login screen banner if sync is missing.
+For a **packaged** desktop build (installed `.dmg` / `.exe`), connect from the app:
 
-**macOS:** `~/Library/Application Support/khaanz-pos-desktop-offline/.env`  
-**Windows:** `%APPDATA%\khaanz-pos-desktop-offline\.env`
+1. On the **login screen** — **Connect to your Khaanz site** (domain + sync key), then **Save & connect**
+2. After sign-in — **Settings** tab to change domain or sync key anytime
 
-Example (production):
+The sync key must match `POS_SYNC_KEY` on your Khaanz server. Domain is stored as `https://your-domain.com` (no trailing slash).
 
-```bash
-KHAANZ_API_ORIGIN="https://your-khaanz-domain.com"
-KHAANZ_SYNC_KEY="same-secret-as-POS_SYNC_KEY-on-server"
-```
-
-Restart the app after saving, sign in, and use **Sync menu** (or wait a few seconds for automatic sync).
+Advanced: the same values are saved to the app user-data `.env` file automatically (`~/Library/Application Support/khaanz-pos-desktop-offline/.env` on macOS).
 
 ## Ship installers (`npm run dist`)
 

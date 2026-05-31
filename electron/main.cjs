@@ -1,5 +1,10 @@
 const { app, BrowserWindow, ipcMain, net } = require("electron");
 const { initAutoUpdater, autoUpdater } = require("./auto-updater.cjs");
+const {
+  readStoredBackendConfig,
+  applyBackendConfig,
+  normalizeApiOrigin,
+} = require("./backend-config.cjs");
 const path = require("path");
 const os = require("os");
 const fs = require("fs");
@@ -1064,28 +1069,97 @@ async function trySyncOnce() {
   await pullSyncFromServer();
 }
 
+let syncIntervalId = null;
+
+function stopSyncLoop() {
+  if (syncIntervalId) {
+    clearInterval(syncIntervalId);
+    syncIntervalId = null;
+  }
+}
+
 function startSyncLoop() {
   const { configured } = syncEnv();
-  if (!configured) return;
+  if (!configured) {
+    stopSyncLoop();
+    return;
+  }
+  if (syncIntervalId) return;
 
   void trySyncOnce().catch(() => {});
-  setInterval(() => {
+  syncIntervalId = setInterval(() => {
     void trySyncOnce().catch(() => {});
   }, 5_000);
+}
+
+function restartSyncLoop() {
+  stopSyncLoop();
+  startSyncLoop();
 }
 
 function registerIpc() {
   ipcMain.handle("pos:bootstrap", async () => {
     const deviceId = getOrCreateDeviceId(db);
+    const stored = readStoredBackendConfig(app);
     const { configured, apiOrigin } = syncEnv();
     return {
       ok: true,
       deviceId,
       syncConfigured: configured,
-      apiOrigin: apiOrigin || null,
-      userDataEnvPath: path.join(app.getPath("userData"), ".env"),
+      apiOrigin: apiOrigin || stored.apiOrigin || null,
+      userDataEnvPath: stored.userDataEnvPath,
       lastMenuPullAt: readLastMenuPullAt(db),
     };
+  });
+
+  ipcMain.handle("pos:get-backend-config", async () => {
+    const stored = readStoredBackendConfig(app);
+    return { ok: true, ...stored };
+  });
+
+  ipcMain.handle("pos:save-backend-config", async (_evt, { apiOrigin, syncKey }) => {
+    const applied = applyBackendConfig(app, { apiOrigin, syncKey });
+    if (!applied.ok) return applied;
+    restartSyncLoop();
+    try {
+      await trySyncOnce();
+    } catch {
+      /* pull may fail offline */
+    }
+    return {
+      ok: true,
+      apiOrigin: applied.apiOrigin,
+      syncConfigured: true,
+      userDataEnvPath: applied.userDataEnvPath,
+      lastMenuPullAt: readLastMenuPullAt(db),
+    };
+  });
+
+  ipcMain.handle("pos:test-backend-config", async (_evt, { apiOrigin, syncKey }) => {
+    const origin = normalizeApiOrigin(apiOrigin);
+    const key = String(syncKey || "").trim();
+    if (!origin || !key) {
+      return { ok: false, error: "Enter domain and sync key first." };
+    }
+    const prevOrigin = process.env.KHAANZ_API_ORIGIN;
+    const prevKey = process.env.KHAANZ_SYNC_KEY;
+    process.env.KHAANZ_API_ORIGIN = origin;
+    process.env.KHAANZ_SYNC_KEY = key;
+    try {
+      const r = await checkBackendConnectivity();
+      if (!r.configured) return { ok: false, error: "Invalid configuration" };
+      if (!r.online) {
+        return {
+          ok: false,
+          error:
+            "Could not reach the server. Check the domain, POS_SYNC_KEY on the server, and that the site is running.",
+        };
+      }
+      return { ok: true, online: true, apiOrigin: origin };
+    } finally {
+      process.env.KHAANZ_API_ORIGIN = prevOrigin;
+      process.env.KHAANZ_SYNC_KEY = prevKey;
+    }
   });
 
   ipcMain.handle("pos:loginWithPin", async (_evt, { userId, pin }) => {

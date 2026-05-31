@@ -44,6 +44,7 @@ import { OpenItemDialog } from "./OpenItemDialog";
 import { PrinterDialog } from "./PrinterDialog";
 import { RecentOrdersPanel } from "./RecentOrdersPanel";
 import { ReportsPanel } from "./ReportsPanel";
+import { BackendConnectionPanel } from "./BackendConnectionPanel";
 
 function money(cents: number) {
   return `₹${(Number(cents || 0) / 100).toFixed(2)}`;
@@ -141,7 +142,7 @@ export function App() {
   const [syncing, setSyncing] = useState(false);
   const [isOnline, setIsOnline] = useState<boolean | null>(null);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
-  const [mainTab, setMainTab] = useState<"pos" | "orders" | "reports">("pos");
+  const [mainTab, setMainTab] = useState<"pos" | "orders" | "reports" | "settings">("pos");
   const [fulfillment, setFulfillment] = useState<FulfillmentMode>("pickup");
   const [customerName, setCustomerName] = useState("");
   const [phone, setPhone] = useState("");
@@ -598,6 +599,33 @@ export function App() {
     }
   }
 
+  const handleBackendSaved = useCallback(
+    async (info: {
+      apiOrigin: string;
+      syncConfigured: boolean;
+      lastMenuPullAt?: string | null;
+    }) => {
+      setBoot((prev) =>
+        prev
+          ? {
+              ...prev,
+              syncConfigured: info.syncConfigured,
+              apiOrigin: info.apiOrigin,
+              lastMenuPullAt: info.lastMenuPullAt ?? prev.lastMenuPullAt,
+            }
+          : prev,
+      );
+      await refreshConnectivity();
+      await refreshSyncStatus();
+      if (session) {
+        await loadMenu();
+        await loadPosSettings();
+        setOrdersRefreshKey((k) => k + 1);
+      }
+    },
+    [session, refreshConnectivity, refreshSyncStatus, loadMenu, loadPosSettings],
+  );
+
   const paymentDisplayName = useCallback(
     (key: string) => posSettings?.paymentMethods.find((p) => p.id === key)?.name ?? key,
     [posSettings],
@@ -758,7 +786,7 @@ export function App() {
     const loginOffline = isOnline === false;
     return (
       <div className="flex min-h-screen items-center justify-center bg-muted/40 p-6">
-        <div className="w-full max-w-sm space-y-6 rounded-2xl border bg-card p-8 shadow-lg">
+        <div className="w-full max-w-md space-y-6 rounded-2xl border bg-card p-8 shadow-lg">
           <div>
             <h1 className="font-semibold text-2xl">Khaanz POS</h1>
             <p
@@ -782,7 +810,14 @@ export function App() {
             </p>
           </div>
 
-          <div className="space-y-4">
+          <BackendConnectionPanel
+            api={api}
+            variant="login"
+            onSaved={(info) => void handleBackendSaved(info)}
+          />
+
+          <div className="space-y-4 border-t pt-4">
+            <p className="font-medium text-sm">Sign in</p>
             <label className="grid gap-2">
               <span className="font-medium text-sm">Staff</span>
               <select
@@ -916,22 +951,20 @@ export function App() {
 
       {!boot?.syncConfigured ? (
         <div className="border-b bg-amber-500/10 px-4 py-2 text-amber-950 text-sm dark:text-amber-100">
-          <strong className="font-medium">Demo menu only.</strong> To load your live restaurant menu,
-          create{" "}
-          <code className="rounded bg-background/80 px-1 py-0.5 text-xs">
-            {boot?.userDataEnvPath || ".env in app data folder"}
-          </code>{" "}
-          with{" "}
-          <code className="rounded bg-background/80 px-1 py-0.5 text-xs">KHAANZ_API_ORIGIN</code>{" "}
-          (your site URL) and{" "}
-          <code className="rounded bg-background/80 px-1 py-0.5 text-xs">KHAANZ_SYNC_KEY</code>{" "}
-          (same as <code className="rounded bg-background/80 px-1 py-0.5 text-xs">POS_SYNC_KEY</code>{" "}
-          on the server), then restart the app and tap <strong>Sync menu</strong>.
+          <strong className="font-medium">Demo menu only.</strong> Open the{" "}
+          <button
+            type="button"
+            className="font-medium underline underline-offset-2"
+            onClick={() => setMainTab("settings")}
+          >
+            Settings
+          </button>{" "}
+          tab to connect your site domain and sync key.
         </div>
       ) : !boot?.lastMenuPullAt ? (
         <div className="border-b bg-amber-500/10 px-4 py-2 text-amber-950 text-sm dark:text-amber-100">
           Connected to <span className="font-medium">{boot.apiOrigin}</span> — tap{" "}
-          <strong>Sync menu</strong> to download your menu from the server.
+          <strong>Sync menu</strong> or <strong>Settings</strong> to refresh from the server.
         </div>
       ) : null}
 
@@ -973,7 +1006,37 @@ export function App() {
         >
           Report
         </button>
+        <button
+          type="button"
+          onClick={() => setMainTab("settings")}
+          className={`rounded-md px-4 py-2 font-medium text-sm transition-colors ${
+            mainTab === "settings"
+              ? "bg-background text-foreground shadow-sm ring-1 ring-border/80"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Settings
+        </button>
       </nav>
+
+      {mainTab === "settings" ? (
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <div className="mx-auto max-w-lg space-y-6">
+            <BackendConnectionPanel
+              api={api}
+              variant="settings"
+              onSaved={(info) => void handleBackendSaved(info)}
+            />
+            <div className="rounded-xl border p-4 text-muted-foreground text-sm">
+              <p className="font-medium text-foreground">Printer</p>
+              <p className="mt-1 text-xs">
+                Use <strong>Connect printer</strong> in the header to choose a receipt printer for
+                silent KOT/Bill printing.
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {mainTab === "orders" ? (
         <RecentOrdersPanel
@@ -984,7 +1047,7 @@ export function App() {
         />
       ) : mainTab === "reports" ? (
         <ReportsPanel refreshKey={ordersRefreshKey} />
-      ) : (
+      ) : mainTab === "pos" ? (
       <div className="grid min-h-0 min-w-0 grid-cols-1 overflow-hidden lg:grid-cols-[1fr_440px]">
         <section className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r">
           <div className="shrink-0 border-b bg-muted/30 p-3">
@@ -1450,7 +1513,7 @@ export function App() {
           </footer>
         </aside>
       </div>
-      )}
+      ) : null}
 
       <PrinterDialog
         open={printerDialogOpen}
