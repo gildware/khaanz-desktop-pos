@@ -105,6 +105,22 @@ On macOS you can smoke-test the app bundle:
 open "release/mac-arm64/Khaanz POS.app"
 ```
 
+### macOS: “Khaanz POS is damaged and can’t be opened”
+
+This is **Gatekeeper** blocking an app downloaded from GitHub (not a corrupt file). The app is unsigned until you add an Apple Developer certificate.
+
+**Fix after install (one time per download):**
+
+```bash
+xattr -cr "/Applications/Khaanz POS.app"
+```
+
+Then open **Khaanz POS** from Applications again.
+
+**Alternative:** Finder → Applications → right‑click **Khaanz POS** → **Open** → confirm **Open** (bypasses quarantine for that app).
+
+If you installed from the `.dmg` before copying to Applications, run the same command on the `.app` inside the DMG, or only on the copy in `/Applications`.
+
 ### App icon
 
 Icons use `logo/khaanz-logo.pdf.png` (`build.icon` in `package.json`). Rebuild with `npm run dist` after replacing the file.

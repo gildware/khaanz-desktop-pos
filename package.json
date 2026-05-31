@@ -60,6 +60,9 @@
     ],
     "mac": {
       "category": "public.app-category.business",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
       "target": [
         "dmg",
         "zip"
