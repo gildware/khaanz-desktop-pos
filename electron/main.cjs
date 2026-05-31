@@ -13,8 +13,11 @@ const {
   getThermalPrintOptions,
   getPrintWindowSize,
 } = require("./thermal-print-windows.cjs");
-const { printPlainTextWindows } = require("./print-windows.cjs");
-const { checkWindowsPrinterOnline } = require("./printer-status-windows.cjs");
+const {
+  resolveWindowsPrinterName,
+  checkWindowsPrinterOnline,
+  printPlainTextWindows,
+} = require("./windows-printer.cjs");
 const path = require("path");
 const os = require("os");
 const fs = require("fs");
@@ -667,7 +670,7 @@ async function isPrinterOnlineOnOs(printerName) {
   if (!name) return { online: false, detail: "No printer selected" };
   if (process.platform === "win32") {
     const r = await checkWindowsPrinterOnline(name);
-    return { online: r.online, detail: r.detail || "" };
+    return { online: r.online, detail: r.detail || "", name: r.name || name };
   }
   const printers = await getPrintersFromAnyWindow();
   const hit = (printers || []).find((p) => p.name === name);
@@ -724,19 +727,39 @@ async function getPrinterConnectionStatus() {
   const saved = resolveSavedPrinterName();
   const printers = await getPrintersFromAnyWindow();
   const list = Array.isArray(printers) ? printers : [];
-  const inList = Boolean(saved && list.some((p) => p.name === saved));
+  let deviceName = saved;
+  let inList = Boolean(saved && list.some((p) => p.name === saved));
+  if (process.platform === "win32" && saved) {
+    const resolved = await resolveWindowsPrinterName(saved);
+    if (resolved.ok) {
+      deviceName = resolved.name;
+      inList = true;
+    } else {
+      inList = false;
+    }
+  }
   const onlineCheck = saved ? await isPrinterOnlineOnOs(saved) : { online: false, detail: "" };
+  if (process.platform === "win32" && onlineCheck.name) {
+    deviceName = onlineCheck.name;
+  }
   const verifiedName = readPrinterVerifiedName(db);
   const verified = Boolean(saved && verifiedName === saved);
   const online = inList && onlineCheck.online;
+  let statusDetail = onlineCheck.detail || "";
+  if (!statusDetail && saved && !inList) {
+    statusDetail =
+      process.platform === "win32"
+        ? "Printer queue was removed in Windows. Click Refresh and select your receipt printer again."
+        : "Printer queue not found";
+  }
   return {
     saved: Boolean(saved),
     available: inList,
     online,
     verified,
     connected: verified && online,
-    deviceName: saved,
-    statusDetail: onlineCheck.detail || (inList ? "" : "Printer queue not found"),
+    deviceName,
+    statusDetail,
     printers: list.map((p) => ({
       name: p.name,
       isDefault: Boolean(p.isDefault),
@@ -878,6 +901,9 @@ async function printSilentHtml({ html, title }) {
 
         if (process.platform === "win32") {
           const r = await printPlainTextWindows(chosen, plainText);
+          if (r.ok && r.deviceName && r.deviceName !== saved) {
+            writeSilentPrinterNameToDb(db, r.deviceName);
+          }
           settle(r);
           return;
         }
@@ -1495,6 +1521,7 @@ function registerIpc() {
     }
     const onlineCheck = await isPrinterOnlineOnOs(saved);
     if (!onlineCheck.online) {
+      clearPrinterVerified(db);
       return {
         ok: false,
         error:
@@ -1502,12 +1529,23 @@ function registerIpc() {
           `“${saved}” is offline or not plugged in. Connect it in Windows, then Refresh.`,
       };
     }
+    const printName =
+      process.platform === "win32" && onlineCheck.name ? onlineCheck.name : saved;
     const sample = buildTestPrintPlainText();
     const r =
       process.platform === "win32"
-        ? await printPlainTextWindows(saved, sample)
+        ? await printPlainTextWindows(printName, sample)
         : await printPlainTextViaHtmlWindow(sample, "Test print");
-    if (r.ok) setPrinterVerified(db, saved);
+    if (r.ok) {
+      const verifiedName =
+        process.platform === "win32" && r.deviceName ? r.deviceName : printName;
+      setPrinterVerified(db, verifiedName);
+      if (process.platform === "win32" && r.deviceName && r.deviceName !== saved) {
+        writeSilentPrinterNameToDb(db, r.deviceName);
+      }
+    } else if (process.platform === "win32") {
+      clearPrinterVerified(db);
+    }
     return r;
   });
 
@@ -1533,8 +1571,21 @@ function registerIpc() {
       if (!printers.some((p) => p.name === name)) {
         return { ok: false, error: "That printer is not available on this PC." };
       }
-      writeSilentPrinterNameToDb(db, name);
-      return { ok: true, deviceName: name };
+      let savedName = name;
+      if (process.platform === "win32") {
+        const resolved = await resolveWindowsPrinterName(name);
+        if (!resolved.ok) {
+          return {
+            ok: false,
+            error:
+              resolved.detail ||
+              "That printer queue is not installed in Windows. Install the driver, then Refresh.",
+          };
+        }
+        savedName = resolved.name;
+      }
+      writeSilentPrinterNameToDb(db, savedName);
+      return { ok: true, deviceName: savedName };
     } catch (e) {
       return { ok: false, error: String(e && e.message ? e.message : e) };
     }
