@@ -5,7 +5,11 @@ const os = require("os");
 const fs = require("fs");
 const Database = require("better-sqlite3");
 
-const isDev = !app.isPackaged;
+/** Packaged app always uses renderer/dist. Unpackaged: dev server unless KHAANZ_LOAD_DIST=1. */
+const forceDist = ["1", "true", "yes"].includes(
+  String(process.env.KHAANZ_LOAD_DIST || "").toLowerCase(),
+);
+const isDev = !app.isPackaged && !forceDist;
 
 /** Load KEY=VALUE pairs from a .env file (does not override existing process.env). */
 function loadEnvFile(filePath) {
@@ -947,23 +951,52 @@ async function checkBackendConnectivity() {
   return { online: pull.ok, configured: true };
 }
 
-function startSyncLoop() {
-  const apiOrigin = (process.env.KHAANZ_API_ORIGIN || "").trim();
-  if (!apiOrigin) return;
-
-  setInterval(async () => {
-    try {
-      await trySyncOnce();
-    } catch (e) {
-      void e;
-    }
-  }, 5_000);
-}
-
-async function trySyncOnce() {
+function syncEnv() {
   const apiOrigin = (process.env.KHAANZ_API_ORIGIN || "").trim();
   const syncKey = (process.env.KHAANZ_SYNC_KEY || "").trim();
-  if (!apiOrigin || !syncKey) return;
+  return { apiOrigin, syncKey, configured: Boolean(apiOrigin && syncKey) };
+}
+
+function markMenuPulledFromServer() {
+  db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('last_menu_pull_at',?)").run(nowIso());
+}
+
+function readLastMenuPullAt(db) {
+  const row = db.prepare("SELECT value FROM meta WHERE key='last_menu_pull_at'").get();
+  return row && row.value ? String(row.value) : null;
+}
+
+async function pullSyncFromServer() {
+  const { apiOrigin, syncKey, configured } = syncEnv();
+  if (!configured) return { ok: false, error: "Sync not configured" };
+
+  const deviceId = getOrCreateDeviceId(db);
+  const pull = await fetchJson(`${apiOrigin.replace(/\/$/, "")}/api/pos-sync/pull`, {
+    method: "GET",
+    headers: {
+      "x-pos-device-id": deviceId,
+      "x-pos-sync-key": syncKey,
+    },
+  });
+  if (pull.ok && pull.json) {
+    if (pull.json.menu) {
+      writeMenuPayloadJson(db, JSON.stringify(pull.json.menu));
+      markMenuPulledFromServer();
+    }
+    if (pull.json.settings) writeSettingsJson(db, JSON.stringify(pull.json.settings));
+    if (Array.isArray(pull.json.recentOrders)) {
+      writeRemoteOrdersJson(db, JSON.stringify(pull.json.recentOrders));
+    }
+  }
+  return {
+    ok: pull.ok,
+    error: pull.ok ? null : pull.json && pull.json.error ? pull.json.error : `HTTP ${pull.status}`,
+  };
+}
+
+async function pushSyncOutbox() {
+  const { apiOrigin, syncKey, configured } = syncEnv();
+  if (!configured) return { ok: false, error: "Sync not configured" };
 
   const deviceId = getOrCreateDeviceId(db);
   const rows = db
@@ -971,7 +1004,7 @@ async function trySyncOnce() {
       "SELECT id, type, payload_json, attempt_count FROM sync_outbox WHERE sent_at IS NULL ORDER BY created_at ASC LIMIT 20",
     )
     .all();
-  if (!rows.length) return;
+  if (!rows.length) return { ok: true, pushed: 0 };
 
   const payload = {
     deviceId,
@@ -1002,7 +1035,7 @@ async function trySyncOnce() {
       }
     });
     t();
-    return;
+    return { ok: false, error: String(err) };
   }
 
   const acceptedIds = Array.isArray(resp.json && resp.json.acceptedEventIds)
@@ -1021,27 +1054,38 @@ async function trySyncOnce() {
     });
     t();
   }
+  return { ok: true, pushed: acceptedIds.length };
+}
 
-  const pull = await fetchJson(`${apiOrigin.replace(/\/$/, "")}/api/pos-sync/pull`, {
-    method: "GET",
-    headers: {
-      "x-pos-device-id": deviceId,
-      "x-pos-sync-key": syncKey,
-    },
-  });
-  if (pull.ok && pull.json) {
-    if (pull.json.menu) writeMenuPayloadJson(db, JSON.stringify(pull.json.menu));
-    if (pull.json.settings) writeSettingsJson(db, JSON.stringify(pull.json.settings));
-    if (Array.isArray(pull.json.recentOrders)) {
-      writeRemoteOrdersJson(db, JSON.stringify(pull.json.recentOrders));
-    }
-  }
+async function trySyncOnce() {
+  const { configured } = syncEnv();
+  if (!configured) return;
+  await pushSyncOutbox();
+  await pullSyncFromServer();
+}
+
+function startSyncLoop() {
+  const { configured } = syncEnv();
+  if (!configured) return;
+
+  void trySyncOnce().catch(() => {});
+  setInterval(() => {
+    void trySyncOnce().catch(() => {});
+  }, 5_000);
 }
 
 function registerIpc() {
   ipcMain.handle("pos:bootstrap", async () => {
     const deviceId = getOrCreateDeviceId(db);
-    return { ok: true, deviceId };
+    const { configured, apiOrigin } = syncEnv();
+    return {
+      ok: true,
+      deviceId,
+      syncConfigured: configured,
+      apiOrigin: apiOrigin || null,
+      userDataEnvPath: path.join(app.getPath("userData"), ".env"),
+      lastMenuPullAt: readLastMenuPullAt(db),
+    };
   });
 
   ipcMain.handle("pos:loginWithPin", async (_evt, { userId, pin }) => {
@@ -1399,21 +1443,33 @@ function registerIpc() {
   });
 
   ipcMain.handle("khaanz:sync-status", async () => {
-    return { ok: true, pendingCount: getSyncPendingCount(db) };
+    const { configured, apiOrigin } = syncEnv();
+    return {
+      ok: true,
+      pendingCount: getSyncPendingCount(db),
+      configured,
+      apiOrigin: apiOrigin || null,
+      lastMenuPullAt: readLastMenuPullAt(db),
+      userDataEnvPath: path.join(app.getPath("userData"), ".env"),
+    };
   });
 
   ipcMain.handle("khaanz:sync-now", async () => {
-    const apiOrigin = (process.env.KHAANZ_API_ORIGIN || "").trim();
-    const syncKey = (process.env.KHAANZ_SYNC_KEY || "").trim();
-    if (!apiOrigin || !syncKey) {
+    const { configured } = syncEnv();
+    if (!configured) {
       return {
         ok: false,
-        error: "Sync is not configured (missing KHAANZ_API_ORIGIN or KHAANZ_SYNC_KEY).",
+        error:
+          "Sync is not configured. Create a .env file in the app data folder with KHAANZ_API_ORIGIN and KHAANZ_SYNC_KEY (must match POS_SYNC_KEY on your server).",
+        userDataEnvPath: path.join(app.getPath("userData"), ".env"),
       };
     }
     try {
-      await trySyncOnce();
-      return { ok: true, serverTime: nowIso() };
+      const push = await pushSyncOutbox();
+      if (!push.ok) return { ok: false, error: push.error || "Push failed" };
+      const pull = await pullSyncFromServer();
+      if (!pull.ok) return { ok: false, error: pull.error || "Pull failed" };
+      return { ok: true, serverTime: nowIso(), lastMenuPullAt: readLastMenuPullAt(db) };
     } catch (e) {
       return { ok: false, error: String(e && e.message ? e.message : e) };
     }

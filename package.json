@@ -14,7 +14,8 @@
     "predist": "npm run build:renderer",
     "dist": "electron-builder --publish never",
     "dist:publish": "electron-builder --publish always",
-    "start": "electron ."
+    "start": "electron .",
+    "start:dist": "KHAANZ_LOAD_DIST=1 electron ."
   },
   "devDependencies": {
     "@electron/rebuild": "^3.7.1",

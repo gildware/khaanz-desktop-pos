@@ -37,8 +37,10 @@ KHAANZ_OPEN_DEVTOOLS=1 npm run dev
 Test the **packaged UI** locally (loads `renderer/dist`, same as the installed app):
 
 ```bash
-npm run build:renderer && npm start
+npm run build:renderer && npm run start:dist
 ```
+
+`npm start` alone expects the Vite dev server (`npm run dev`). Use `start:dist` after a renderer build.
 
 If the window looks unstyled, rebuild the renderer — production builds must not use `crossorigin` on assets (fixed in `renderer/vite.config.ts`).
 
@@ -72,7 +74,19 @@ Server endpoints:
 - `POST /api/pos-sync/push`
 - `GET /api/pos-sync/pull`
 
-For a **packaged** desktop build, you can also place `.env` in the app user-data folder (loaded on startup).
+For a **packaged** desktop build (installed `.dmg` / `.exe`), create `.env` in the app **user data** folder (loaded on startup). The app shows this path on the login screen banner if sync is missing.
+
+**macOS:** `~/Library/Application Support/khaanz-pos-desktop-offline/.env`  
+**Windows:** `%APPDATA%\khaanz-pos-desktop-offline\.env`
+
+Example (production):
+
+```bash
+KHAANZ_API_ORIGIN="https://your-khaanz-domain.com"
+KHAANZ_SYNC_KEY="same-secret-as-POS_SYNC_KEY-on-server"
+```
+
+Restart the app after saving, sign in, and use **Sync menu** (or wait a few seconds for automatic sync).
 
 ## Ship installers (`npm run dist`)
 

@@ -118,7 +118,13 @@ export function App() {
   const api = window.posDesktop;
   const desktop = window.khaanzDesktop;
 
-  const [boot, setBoot] = useState<{ deviceId: string } | null>(null);
+  const [boot, setBoot] = useState<{
+    deviceId: string;
+    syncConfigured: boolean;
+    apiOrigin: string | null;
+    userDataEnvPath: string;
+    lastMenuPullAt: string | null;
+  } | null>(null);
   const [users, setUsers] = useState<Array<{ id: string; displayName: string; role: string }>>([]);
   const [userId, setUserId] = useState("");
   const [pin, setPin] = useState("");
@@ -244,7 +250,22 @@ export function App() {
     }
     try {
       const r = await desktop.getSyncStatus();
-      if (r.ok) setPendingSyncCount(r.pendingCount);
+      if (r.ok) {
+        setPendingSyncCount(r.pendingCount);
+        if (r.configured !== undefined || r.lastMenuPullAt !== undefined) {
+          setBoot((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  syncConfigured: r.configured ?? prev.syncConfigured,
+                  apiOrigin: r.apiOrigin ?? prev.apiOrigin,
+                  lastMenuPullAt: r.lastMenuPullAt ?? prev.lastMenuPullAt,
+                  userDataEnvPath: r.userDataEnvPath ?? prev.userDataEnvPath,
+                }
+              : prev,
+          );
+        }
+      }
     } catch {
       setPendingSyncCount(0);
     }
@@ -255,7 +276,15 @@ export function App() {
     (async () => {
       const b = await api.bootstrap();
       if (!alive) return;
-      if (b.ok) setBoot({ deviceId: b.deviceId });
+      if (b.ok) {
+        setBoot({
+          deviceId: b.deviceId,
+          syncConfigured: Boolean(b.syncConfigured),
+          apiOrigin: b.apiOrigin ?? null,
+          userDataEnvPath: b.userDataEnvPath ?? "",
+          lastMenuPullAt: b.lastMenuPullAt ?? null,
+        });
+      }
       const u = await api.listUsers();
       if (!alive) return;
       if (u.ok) {
@@ -473,10 +502,40 @@ export function App() {
 
   useEffect(() => {
     if (!session) return;
-    void loadMenu();
-    void loadPosSettings();
-    void refreshPrinterStatus();
-  }, [session, loadMenu, loadPosSettings, refreshPrinterStatus]);
+    void (async () => {
+      if (boot?.syncConfigured && desktop?.syncNow) {
+        setSyncing(true);
+        try {
+          const r = await desktop.syncNow();
+          if (r.ok) {
+            setBoot((prev) =>
+              prev
+                ? { ...prev, lastMenuPullAt: r.lastMenuPullAt ?? prev.lastMenuPullAt }
+                : prev,
+            );
+          }
+        } catch {
+          /* menu load below still runs */
+        } finally {
+          setSyncing(false);
+        }
+      }
+      await loadMenu();
+      await loadPosSettings();
+      await refreshPrinterStatus();
+      await refreshConnectivity();
+      await refreshSyncStatus();
+    })();
+  }, [
+    session,
+    boot?.syncConfigured,
+    desktop,
+    loadMenu,
+    loadPosSettings,
+    refreshPrinterStatus,
+    refreshConnectivity,
+    refreshSyncStatus,
+  ]);
 
   useEffect(() => {
     if (!posSettings?.paymentMethods.length) return;
@@ -530,6 +589,9 @@ export function App() {
       setOrdersRefreshKey((k) => k + 1);
       await refreshConnectivity();
       await refreshSyncStatus();
+      if (r.ok && "lastMenuPullAt" in r && r.lastMenuPullAt) {
+        setBoot((prev) => (prev ? { ...prev, lastMenuPullAt: r.lastMenuPullAt ?? null } : prev));
+      }
       setNotice("Menu and orders synced.");
     } finally {
       setSyncing(false);
@@ -812,19 +874,20 @@ export function App() {
               </>
             )}
           </span>
-          {pendingSyncCount > 0 ? (
+          {boot?.syncConfigured ? (
             <button
               type="button"
               onClick={() => void doSync()}
               disabled={syncing || busy}
               className="inline-flex h-9 items-center gap-2 rounded-lg border px-3 text-sm disabled:opacity-50"
+              title="Pull menu, settings, and orders from your Khaanz site"
             >
               {syncing ? (
                 <Loader2Icon className="size-4 animate-spin" />
               ) : (
                 <RefreshCwIcon className="size-4" />
               )}
-              Sync
+              Sync menu
             </button>
           ) : null}
           <button
@@ -850,6 +913,31 @@ export function App() {
           </button>
         </div>
       </header>
+
+      {!boot?.syncConfigured ? (
+        <div className="border-b bg-amber-500/10 px-4 py-2 text-amber-950 text-sm dark:text-amber-100">
+          <strong className="font-medium">Demo menu only.</strong> To load your live restaurant menu,
+          create{" "}
+          <code className="rounded bg-background/80 px-1 py-0.5 text-xs">
+            {boot?.userDataEnvPath || ".env in app data folder"}
+          </code>{" "}
+          with{" "}
+          <code className="rounded bg-background/80 px-1 py-0.5 text-xs">KHAANZ_API_ORIGIN</code>{" "}
+          (your site URL) and{" "}
+          <code className="rounded bg-background/80 px-1 py-0.5 text-xs">KHAANZ_SYNC_KEY</code>{" "}
+          (same as <code className="rounded bg-background/80 px-1 py-0.5 text-xs">POS_SYNC_KEY</code>{" "}
+          on the server), then restart the app and tap <strong>Sync menu</strong>.
+        </div>
+      ) : !boot?.lastMenuPullAt ? (
+        <div className="border-b bg-amber-500/10 px-4 py-2 text-amber-950 text-sm dark:text-amber-100">
+          Connected to <span className="font-medium">{boot.apiOrigin}</span> — tap{" "}
+          <strong>Sync menu</strong> to download your menu from the server.
+        </div>
+      ) : null}
+
+      {notice ? (
+        <div className="border-b bg-emerald-500/10 px-4 py-2 text-emerald-900 text-sm">{notice}</div>
+      ) : null}
 
       <nav className="flex shrink-0 gap-1 border-b bg-muted/30 px-4 py-2">
         <button

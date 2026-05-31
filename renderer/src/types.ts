@@ -150,7 +150,17 @@ export type CreateOrderLine = {
 };
 
 export type PosDesktopApi = {
-  bootstrap: () => Promise<{ ok: true; deviceId: string } | { ok: false; error: string }>;
+  bootstrap: () => Promise<
+    | {
+        ok: true;
+        deviceId: string;
+        syncConfigured?: boolean;
+        apiOrigin?: string | null;
+        userDataEnvPath?: string;
+        lastMenuPullAt?: string | null;
+      }
+    | { ok: false; error: string }
+  >;
   listUsers: () => Promise<{ ok: true; users: Array<{ id: string; displayName: string; role: string }> }>;
   loginWithPin: (
     userId: string,
@@ -199,11 +209,24 @@ export type PosDesktopApi = {
 
 export type KhaanzDesktopApi = {
   isDesktop: true;
-  syncNow: () => Promise<{ ok: true; serverTime?: string } | { ok: false; error: string }>;
+  syncNow: () => Promise<
+    | { ok: true; serverTime?: string; lastMenuPullAt?: string | null }
+    | { ok: false; error: string; userDataEnvPath?: string }
+  >;
   checkConnectivity: () => Promise<
     { ok: true; online: boolean; configured?: boolean } | { ok: false; error: string }
   >;
-  getSyncStatus: () => Promise<{ ok: true; pendingCount: number } | { ok: false; error: string }>;
+  getSyncStatus: () => Promise<
+    | {
+        ok: true;
+        pendingCount: number;
+        configured?: boolean;
+        apiOrigin?: string | null;
+        lastMenuPullAt?: string | null;
+        userDataEnvPath?: string;
+      }
+    | { ok: false; error: string }
+  >;
   printSilentHtml: (html: string, title?: string) => Promise<{ ok: true } | { ok: false; error: string }>;
   listRecentPosOrders: () => Promise<
     { ok: true; orders: RecentOrderRow[] } | { ok: false; error: string }
