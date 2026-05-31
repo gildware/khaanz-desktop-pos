@@ -17,8 +17,9 @@ const forceDist = ["1", "true", "yes"].includes(
 );
 const isDev = !app.isPackaged && !forceDist;
 
-/** Load KEY=VALUE pairs from a .env file (does not override existing process.env). */
-function loadEnvFile(filePath) {
+/** Load KEY=VALUE pairs from a .env file. @param {{ override?: boolean }} [opts] */
+function loadEnvFile(filePath, opts = {}) {
+  const override = Boolean(opts.override);
   if (!filePath || !fs.existsSync(filePath)) return;
   const text = fs.readFileSync(filePath, "utf8");
   for (const rawLine of text.split(/\r?\n/)) {
@@ -28,7 +29,7 @@ function loadEnvFile(filePath) {
     if (eq <= 0) continue;
     const key = line.slice(0, eq).trim();
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
-    if (process.env[key] !== undefined) continue;
+    if (!override && process.env[key] !== undefined) continue;
     let val = line.slice(eq + 1).trim();
     if (
       (val.startsWith('"') && val.endsWith('"')) ||
@@ -40,8 +41,10 @@ function loadEnvFile(filePath) {
   }
 }
 
-// Dev / repo: pos-desktop/.env — packaged app can also use userData/.env (loaded in whenReady).
-loadEnvFile(path.join(__dirname, "..", ".env"));
+// Dev only: repo .env — packaged app uses userData/.env (loaded in whenReady, overrides).
+if (!app.isPackaged) {
+  loadEnvFile(path.join(__dirname, "..", ".env"));
+}
 
 function userDataDir() {
   return app.getPath("userData");
@@ -959,29 +962,44 @@ async function fetchJson(url, options) {
   });
 }
 
-async function checkBackendConnectivity() {
-  const apiOrigin = (process.env.KHAANZ_API_ORIGIN || "").trim();
-  const syncKey = (process.env.KHAANZ_SYNC_KEY || "").trim();
-  if (!apiOrigin || !syncKey) {
+async function checkBackendConnectivityWith(apiOrigin, syncKey) {
+  const origin = String(apiOrigin || "").trim();
+  const key = String(syncKey || "").trim();
+  if (!origin || !key) {
     return { online: false, configured: false };
   }
 
   const deviceId = getOrCreateDeviceId(db);
-  const pull = await fetchJson(`${apiOrigin.replace(/\/$/, "")}/api/pos-sync/pull`, {
+  const pull = await fetchJson(`${origin.replace(/\/$/, "")}/api/pos-sync/pull`, {
     method: "GET",
     headers: {
       "x-pos-device-id": deviceId,
-      "x-pos-sync-key": syncKey,
+      "x-pos-sync-key": key,
     },
   });
 
   return { online: pull.ok, configured: true };
 }
 
+async function checkBackendConnectivity() {
+  return checkBackendConnectivityWith(
+    process.env.KHAANZ_API_ORIGIN,
+    process.env.KHAANZ_SYNC_KEY,
+  );
+}
+
 function syncEnv() {
   const apiOrigin = (process.env.KHAANZ_API_ORIGIN || "").trim();
   const syncKey = (process.env.KHAANZ_SYNC_KEY || "").trim();
   return { apiOrigin, syncKey, configured: Boolean(apiOrigin && syncKey) };
+}
+
+function applyStoredBackendToProcessEnv() {
+  const stored = readStoredBackendConfig(app);
+  if (!stored.configured) return stored;
+  process.env.KHAANZ_API_ORIGIN = stored.apiOrigin;
+  process.env.KHAANZ_SYNC_KEY = stored.syncKey;
+  return stored;
 }
 
 function markMenuPulledFromServer() {
@@ -1122,13 +1140,16 @@ function restartSyncLoop() {
 function registerIpc() {
   ipcMain.handle("pos:bootstrap", async () => {
     const deviceId = getOrCreateDeviceId(db);
-    const stored = readStoredBackendConfig(app);
-    const { configured, apiOrigin } = syncEnv();
+    const stored = applyStoredBackendToProcessEnv();
+    const { online } = stored.configured
+      ? await checkBackendConnectivityWith(stored.apiOrigin, stored.syncKey)
+      : { online: false };
     return {
       ok: true,
       deviceId,
-      syncConfigured: configured,
-      apiOrigin: apiOrigin || stored.apiOrigin || null,
+      syncConfigured: stored.configured,
+      serverOnline: online,
+      apiOrigin: stored.configured ? stored.apiOrigin : null,
       userDataEnvPath: stored.userDataEnvPath,
       lastMenuPullAt: readLastMenuPullAt(db),
     };
@@ -1136,15 +1157,19 @@ function registerIpc() {
 
   ipcMain.handle("pos:get-backend-config", async () => {
     const stored = readStoredBackendConfig(app);
-    return { ok: true, ...stored };
+    const { online } = stored.configured
+      ? await checkBackendConnectivityWith(stored.apiOrigin, stored.syncKey)
+      : { online: false };
+    return { ok: true, ...stored, online };
   });
 
   ipcMain.handle("pos:save-backend-config", async (_evt, { apiOrigin, syncKey }) => {
     const applied = applyBackendConfig(app, { apiOrigin, syncKey });
     if (!applied.ok) return applied;
     restartSyncLoop();
+    const { online } = await checkBackendConnectivity();
     try {
-      await trySyncOnce();
+      if (online) await trySyncOnce();
     } catch {
       /* pull may fail offline */
     }
@@ -1152,6 +1177,7 @@ function registerIpc() {
       ok: true,
       apiOrigin: applied.apiOrigin,
       syncConfigured: true,
+      online,
       userDataEnvPath: applied.userDataEnvPath,
       lastMenuPullAt: readLastMenuPullAt(db),
     };
@@ -1556,14 +1582,14 @@ function registerIpc() {
   });
 
   ipcMain.handle("khaanz:sync-status", async () => {
-    const { configured, apiOrigin } = syncEnv();
+    const stored = readStoredBackendConfig(app);
     return {
       ok: true,
       pendingCount: getSyncPendingCount(db),
-      configured,
-      apiOrigin: apiOrigin || null,
+      configured: stored.configured,
+      apiOrigin: stored.configured ? stored.apiOrigin : null,
       lastMenuPullAt: readLastMenuPullAt(db),
-      userDataEnvPath: path.join(app.getPath("userData"), ".env"),
+      userDataEnvPath: stored.userDataEnvPath,
     };
   });
 
@@ -1767,7 +1793,8 @@ function registerIpc() {
 }
 
 app.whenReady().then(() => {
-  loadEnvFile(path.join(app.getPath("userData"), ".env"));
+  loadEnvFile(path.join(app.getPath("userData"), ".env"), { override: true });
+  applyStoredBackendToProcessEnv();
   db = openDb();
   migrate(db);
   ensureSeedData(db);

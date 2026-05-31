@@ -167,6 +167,7 @@ export type PosDesktopApi = {
         apiOrigin: string;
         syncKey: string;
         configured: boolean;
+        online?: boolean;
         userDataEnvPath: string;
         hasStoredFile?: boolean;
       }
@@ -180,6 +181,7 @@ export type PosDesktopApi = {
         ok: true;
         apiOrigin: string;
         syncConfigured: boolean;
+        online?: boolean;
         userDataEnvPath?: string;
         lastMenuPullAt?: string | null;
       }

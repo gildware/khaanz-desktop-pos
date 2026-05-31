@@ -8,6 +8,7 @@ type BackendConfigApi = {
         apiOrigin: string;
         syncKey: string;
         configured: boolean;
+        online?: boolean;
         userDataEnvPath: string;
       }
     | { ok: false; error: string }
@@ -20,6 +21,7 @@ type BackendConfigApi = {
         ok: true;
         apiOrigin: string;
         syncConfigured: boolean;
+        online?: boolean;
         lastMenuPullAt?: string | null;
       }
     | { ok: false; error: string }
@@ -42,12 +44,8 @@ type Props = {
   variant?: "login" | "settings";
 };
 
-function domainInputFromOrigin(origin: string) {
-  return origin.replace(/^https?:\/\//i, "").replace(/\/+$/, "");
-}
-
 export function BackendConnectionPanel({ api, onSaved, variant = "settings" }: Props) {
-  const [domain, setDomain] = useState("");
+  const [serverUrl, setServerUrl] = useState("");
   const [syncKey, setSyncKey] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -65,9 +63,9 @@ export function BackendConnectionPanel({ api, onSaved, variant = "settings" }: P
         setError(r.error);
         return;
       }
-      setDomain(domainInputFromOrigin(r.apiOrigin));
+      setServerUrl(r.apiOrigin);
       setSyncKey(r.syncKey);
-      setConnectedOrigin(r.configured ? r.apiOrigin : null);
+      setConnectedOrigin(r.online && r.apiOrigin ? r.apiOrigin : null);
       setTestOk(null);
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
@@ -85,13 +83,15 @@ export function BackendConnectionPanel({ api, onSaved, variant = "settings" }: P
     setError("");
     setMessage("");
     setTestOk(null);
+    setConnectedOrigin(null);
     try {
-      const r = await api.testBackendConfig(domain, syncKey);
+      const r = await api.testBackendConfig(serverUrl, syncKey);
       if (!r.ok) {
         setError(r.error);
         return;
       }
       setTestOk(true);
+      setConnectedOrigin(r.apiOrigin);
       setMessage("Connection successful — your server responded.");
     } finally {
       setBusy(false);
@@ -103,14 +103,23 @@ export function BackendConnectionPanel({ api, onSaved, variant = "settings" }: P
     setError("");
     setMessage("");
     try {
-      const r = await api.saveBackendConfig(domain, syncKey);
+      const r = await api.saveBackendConfig(serverUrl, syncKey);
       if (!r.ok) {
         setError(r.error);
         return;
       }
-      setConnectedOrigin(r.apiOrigin);
-      setTestOk(true);
-      setMessage("Saved and connected. Menu will sync from your site.");
+      setServerUrl(r.apiOrigin);
+      if (r.online) {
+        setConnectedOrigin(r.apiOrigin);
+        setTestOk(true);
+        setMessage("Saved and connected. Menu will sync from your site.");
+      } else {
+        setConnectedOrigin(null);
+        setTestOk(null);
+        setMessage(
+          "Saved, but the server is not reachable right now. Fix the URL or sync key, or try again when the site is online.",
+        );
+      }
       onSaved?.({
         apiOrigin: r.apiOrigin,
         syncConfigured: r.syncConfigured,
@@ -140,8 +149,8 @@ export function BackendConnectionPanel({ api, onSaved, variant = "settings" }: P
           </p>
           <p className="text-muted-foreground text-xs leading-relaxed">
             {variant === "login"
-              ? "Link this register to your live menu and orders. Use the same domain as your website and the sync key from server env (POS_SYNC_KEY)."
-              : "Domain and sync key are stored on this computer. They must match POS_SYNC_KEY on your Khaanz server."}
+              ? "Link this register to your live menu and orders. Use your site URL (including http or https) and the sync key from server env (POS_SYNC_KEY)."
+              : "Server URL and sync key are stored on this computer. They must match POS_SYNC_KEY on your Khaanz server."}
           </p>
           {connectedOrigin ? (
             <p className="flex items-center gap-1.5 text-emerald-700 text-xs dark:text-emerald-400">
@@ -153,26 +162,22 @@ export function BackendConnectionPanel({ api, onSaved, variant = "settings" }: P
       </div>
 
       <label className="grid gap-1.5">
-        <span className="font-medium text-sm">Site domain</span>
-        <div className="flex overflow-hidden rounded-lg border bg-background focus-within:ring-2 focus-within:ring-ring/30">
-          <span className="flex items-center border-r bg-muted/50 px-3 text-muted-foreground text-sm">
-            https://
-          </span>
-          <input
-            type="text"
-            value={domain}
-            onChange={(e) => {
-              setDomain(e.target.value.replace(/^https?:\/\//i, "").trim());
-              setTestOk(null);
-            }}
-            placeholder="your-restaurant.com"
-            disabled={busy}
-            className="h-10 min-w-0 flex-1 bg-transparent px-3 text-sm outline-none"
-            autoCapitalize="off"
-            autoCorrect="off"
-            spellCheck={false}
-          />
-        </div>
+        <span className="font-medium text-sm">Server URL</span>
+        <input
+          type="url"
+          value={serverUrl}
+          onChange={(e) => {
+            setServerUrl(e.target.value);
+            setTestOk(null);
+            setConnectedOrigin(null);
+          }}
+          placeholder="https://your-restaurant.com or http://localhost:3000"
+          disabled={busy}
+          className="h-10 rounded-lg border bg-background px-3 text-sm"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+        />
       </label>
 
       <label className="grid gap-1.5">
@@ -183,6 +188,7 @@ export function BackendConnectionPanel({ api, onSaved, variant = "settings" }: P
           onChange={(e) => {
             setSyncKey(e.target.value);
             setTestOk(null);
+            setConnectedOrigin(null);
           }}
           placeholder="Same as POS_SYNC_KEY on server"
           disabled={busy}
@@ -195,7 +201,7 @@ export function BackendConnectionPanel({ api, onSaved, variant = "settings" }: P
         <button
           type="button"
           onClick={() => void handleTest()}
-          disabled={busy || !domain.trim() || !syncKey.trim()}
+          disabled={busy || !serverUrl.trim() || !syncKey.trim()}
           className="inline-flex h-9 items-center justify-center rounded-lg border bg-background px-4 text-sm disabled:opacity-50"
         >
           {busy ? <Loader2Icon className="size-4 animate-spin" /> : "Test connection"}
@@ -203,7 +209,7 @@ export function BackendConnectionPanel({ api, onSaved, variant = "settings" }: P
         <button
           type="button"
           onClick={() => void handleSave()}
-          disabled={busy || !domain.trim() || !syncKey.trim()}
+          disabled={busy || !serverUrl.trim() || !syncKey.trim()}
           className="inline-flex h-9 items-center justify-center rounded-lg bg-primary px-4 font-medium text-primary-foreground text-sm disabled:opacity-50"
         >
           {busy ? <Loader2Icon className="size-4 animate-spin" /> : "Save & connect"}

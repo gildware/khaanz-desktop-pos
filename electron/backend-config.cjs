@@ -62,17 +62,19 @@ function writeUserDataEnv(userDataDir, updates) {
  */
 function readStoredBackendConfig(electronApp) {
   const userData = electronApp.getPath("userData");
-  const fromFile = parseEnvFile(userDataEnvPath(userData));
-  const apiOrigin = normalizeApiOrigin(
-    fromFile.KHAANZ_API_ORIGIN || process.env.KHAANZ_API_ORIGIN || "",
-  );
-  const syncKey = (fromFile.KHAANZ_SYNC_KEY || process.env.KHAANZ_SYNC_KEY || "").trim();
+  const envPath = userDataEnvPath(userData);
+  const fromFile = parseEnvFile(envPath);
+  const savedInApp = Boolean(fromFile.KHAANZ_API_ORIGIN && fromFile.KHAANZ_SYNC_KEY);
+  const apiOrigin = normalizeApiOrigin(fromFile.KHAANZ_API_ORIGIN || "");
+  const syncKey = (fromFile.KHAANZ_SYNC_KEY || "").trim();
+  const devOrigin = normalizeApiOrigin(process.env.KHAANZ_API_ORIGIN || "");
+  const devKey = (process.env.KHAANZ_SYNC_KEY || "").trim();
   return {
-    apiOrigin,
-    syncKey,
-    configured: Boolean(apiOrigin && syncKey),
-    userDataEnvPath: userDataEnvPath(userData),
-    hasStoredFile: fs.existsSync(userDataEnvPath(userData)),
+    apiOrigin: apiOrigin || (savedInApp ? "" : devOrigin),
+    syncKey: syncKey || (savedInApp ? "" : devKey),
+    configured: savedInApp,
+    userDataEnvPath: envPath,
+    hasStoredFile: fs.existsSync(envPath),
   };
 }
 
@@ -83,7 +85,7 @@ function readStoredBackendConfig(electronApp) {
 function applyBackendConfig(electronApp, input) {
   const apiOrigin = normalizeApiOrigin(input.apiOrigin);
   const syncKey = String(input.syncKey || "").trim();
-  if (!apiOrigin) return { ok: false, error: "Enter your site domain (e.g. khaanz.com)" };
+  if (!apiOrigin) return { ok: false, error: "Enter your server URL (e.g. https://khaanz.com)" };
   if (!syncKey) return { ok: false, error: "Enter the sync key (POS_SYNC_KEY from your server)" };
 
   const userData = electronApp.getPath("userData");
