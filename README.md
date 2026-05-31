@@ -34,6 +34,14 @@ npm --prefix renderer install
 KHAANZ_OPEN_DEVTOOLS=1 npm run dev
 ```
 
+Test the **packaged UI** locally (loads `renderer/dist`, same as the installed app):
+
+```bash
+npm run build:renderer && npm start
+```
+
+If the window looks unstyled, rebuild the renderer — production builds must not use `crossorigin` on assets (fixed in `renderer/vite.config.ts`).
+
 If the app fails to start with a native-module error after `npm install`, rebuild SQLite for Electron:
 
 ```bash

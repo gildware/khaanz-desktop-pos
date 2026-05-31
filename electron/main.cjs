@@ -872,7 +872,7 @@ function createMainWindow() {
       win.webContents.openDevTools({ mode: "detach" });
     }
   } else {
-    const indexHtml = path.join(__dirname, "..", "renderer", "dist", "index.html");
+    const indexHtml = path.join(app.getAppPath(), "renderer", "dist", "index.html");
     win.loadFile(indexHtml);
   }
 

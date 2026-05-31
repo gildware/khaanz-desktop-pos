@@ -54,7 +54,8 @@
       "!**/*.map"
     ],
     "asarUnpack": [
-      "**/node_modules/better-sqlite3/**"
+      "**/node_modules/better-sqlite3/**",
+      "**/renderer/dist/**"
     ],
     "mac": {
       "category": "public.app-category.business",
