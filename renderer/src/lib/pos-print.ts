@@ -145,30 +145,43 @@ export function receiptLineToKotLine(r: PosReceiptLine) {
   return { label: r.label, qty: r.qty, addonRows: r.addonRows };
 }
 
+/** Body fragment styles (full document + bold rules applied in Electron print wrapper). */
 const THERMAL_STYLE = `
-  @page { size: 80mm auto; margin: 4mm; }
-  * { box-sizing: border-box; }
+  @page { size: 80mm auto; margin: 3mm; }
+  * {
+    box-sizing: border-box;
+    font-weight: 700 !important;
+    color: #000 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
   body {
-    font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
-    font-size: 11px;
-    line-height: 1.35;
-    color: #000;
+    font-family: Arial, Helvetica, "Liberation Sans", sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.45;
     margin: 0;
     padding: 8px;
-    max-width: 80mm;
+    max-width: 72mm;
   }
-  h1 { font-size: 14px; margin: 0 0 6px; font-weight: 700; text-align: center; }
-  .pre { white-space: pre-wrap; font-size: 10px; margin: 4px 0; color: #222; }
-  .muted { color: #333; font-size: 10px; margin: 2px 0; }
-  table { width: 100%; border-collapse: collapse; margin: 6px 0; }
-  th, td { padding: 2px 0; text-align: left; vertical-align: top; font-size: 10px; }
-  th { border-bottom: 1px solid #000; }
+  h1 { font-size: 16px; margin: 0 0 8px; font-weight: 700; text-align: center; }
+  .pre { white-space: pre-wrap; font-size: 11px; margin: 4px 0; font-weight: 700; }
+  .muted { font-size: 11px; margin: 3px 0; font-weight: 700; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+  th, td { padding: 3px 0; text-align: left; vertical-align: top; font-size: 11px; font-weight: 700; }
+  th { border-bottom: 2px solid #000; font-weight: 700; }
   .right { text-align: right; white-space: nowrap; }
-  .sep { border-top: 1px dashed #000; margin: 8px 0; padding-top: 6px; }
-  .total { font-weight: 700; font-size: 12px; }
-  tr.addon-line td { font-size: 9px; line-height: 1.2; color: #333; }
-  tr.addon-line .iname { padding-left: 6px; }
+  .sep { border-top: 2px solid #000; margin: 8px 0; padding-top: 6px; font-weight: 700; }
+  .total { font-weight: 700; font-size: 14px; }
+  tr.addon-line td { font-size: 10px; line-height: 1.3; font-weight: 700; }
+  tr.addon-line .iname { padding-left: 8px; }
 `;
+
+export function wrapThermalPrintDocument(bodyHtml: string, title: string): string {
+  const safeTitle = escapeHtml(title || "Receipt");
+  const body = bodyHtml.replace(/<style>[\s\S]*?<\/style>/gi, "");
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>${safeTitle}</title><style>${THERMAL_STYLE}</style></head><body>${body}</body></html>`;
+}
 
 export type PosBillPrintOptions = {
   restaurantName: string;
@@ -315,9 +328,13 @@ export async function printPosBillThermal(
   options: PosBillPrintOptions,
   desktop?: { printSilentHtml: (html: string, title?: string) => Promise<{ ok: boolean; error?: string }> },
 ): Promise<void> {
-  const html = buildBillHtmlBody(options);
+  const body = buildBillHtmlBody(options);
+  if (!body.trim() || !options.lines.length) {
+    throw new Error("Nothing to print — cart is empty.");
+  }
+  const doc = wrapThermalPrintDocument(body, "Bill");
   if (desktop?.printSilentHtml) {
-    const r = await desktop.printSilentHtml(html, "Bill");
+    const r = await desktop.printSilentHtml(doc, "Bill");
     if (r.ok) return;
     throw new Error(r.error || "Print failed");
   }
@@ -327,9 +344,13 @@ export async function printPosKotThermal(
   options: PosKotPrintOptions,
   desktop?: { printSilentHtml: (html: string, title?: string) => Promise<{ ok: boolean; error?: string }> },
 ): Promise<void> {
-  const html = buildKotHtmlBody(options);
+  const body = buildKotHtmlBody(options);
+  if (!body.trim() || !options.lines.length) {
+    throw new Error("Nothing to print — no KOT lines.");
+  }
+  const doc = wrapThermalPrintDocument(body, "KOT");
   if (desktop?.printSilentHtml) {
-    const r = await desktop.printSilentHtml(html, "KOT");
+    const r = await desktop.printSilentHtml(doc, "KOT");
     if (r.ok) return;
     throw new Error(r.error || "Print failed");
   }

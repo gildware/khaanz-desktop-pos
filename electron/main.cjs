@@ -5,6 +5,7 @@ const {
   applyBackendConfig,
   normalizeApiOrigin,
 } = require("./backend-config.cjs");
+const { wrapThermalPrintDocument } = require("./thermal-print.cjs");
 const path = require("path");
 const os = require("os");
 const fs = require("fs");
@@ -633,22 +634,36 @@ async function printSilentHtml({ html, title }) {
     return { ok: false, error: "Invalid print payload." };
   }
   const safeTitle = typeof title === "string" && title.length < 200 ? title : "Receipt";
+  const doc = /^\s*<!DOCTYPE/i.test(html)
+    ? html
+    : wrapThermalPrintDocument(html, safeTitle);
 
-  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>${safeTitle}</title></head><body>${html}</body></html>`;
+  const printDir = path.join(app.getPath("temp"), "khaanz-print");
+  fs.mkdirSync(printDir, { recursive: true });
+  const tempFile = path.join(printDir, `receipt-${Date.now()}.html`);
+  fs.writeFileSync(tempFile, doc, "utf8");
+
   return new Promise((resolve) => {
     const win = new BrowserWindow({
       show: false,
-      width: 400,
-      height: 900,
+      width: 420,
+      height: 1200,
       webPreferences: { sandbox: false },
     });
-    const dataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(doc)}`;
 
     let settled = false;
+    const cleanup = () => {
+      try {
+        fs.unlinkSync(tempFile);
+      } catch {
+        /* ignore */
+      }
+    };
     const settle = (result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      cleanup();
       try {
         if (!win.isDestroyed()) win.close();
       } catch {
@@ -657,17 +672,23 @@ async function printSilentHtml({ html, title }) {
       resolve(result);
     };
 
-    const timeoutMs = 25_000;
+    const timeoutMs = 30_000;
     const timeout = setTimeout(() => settle({ ok: false, error: "Print timed out" }), timeoutMs);
 
-    win.webContents.once("did-fail-load", (_e, _code, desc) => settle({ ok: false, error: desc || "Load failed" }));
+    win.webContents.once("did-fail-load", (_e, _code, desc) =>
+      settle({ ok: false, error: desc || "Load failed" }),
+    );
     win.webContents.once("render-process-gone", (_e, details) =>
-      settle({ ok: false, error: details && details.reason ? `Print crashed (${details.reason})` : "Print crashed" }),
+      settle({
+        ok: false,
+        error:
+          details && details.reason ? `Print crashed (${details.reason})` : "Print crashed",
+      }),
     );
 
     win.webContents.once("did-finish-load", async () => {
       try {
-        await new Promise((r) => setTimeout(r, 150));
+        await new Promise((r) => setTimeout(r, 500));
         const configured = readSilentPrinterNameFromDb(db);
         const fromEnv = (process.env.KHAANZ_SILENT_PRINTER || "").trim();
         const deviceName = (fromEnv || configured).trim();
@@ -687,13 +708,14 @@ async function printSilentHtml({ html, title }) {
           if (printSettled) return;
           printSettled = true;
           settle({ ok: false, error: "Print timed out" });
-        }, 15_000);
+        }, 20_000);
 
         win.webContents.print(
           {
             silent: true,
             printBackground: true,
             deviceName: chosen,
+            margins: { marginType: "none" },
             pageSize: { width: 80000, height: 300000 },
           },
           (success, failureReason) => {
@@ -709,7 +731,7 @@ async function printSilentHtml({ html, title }) {
       }
     });
 
-    win.loadURL(dataUrl);
+    win.loadFile(tempFile);
   });
 }
 
