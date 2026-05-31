@@ -105,7 +105,7 @@ export function PrinterDialog({ open, onClose, onSaved }: Props) {
   const saved = Boolean(status?.saved);
   const online = Boolean(status?.online);
   const verified = Boolean(status?.verified);
-  const showTestPrint = saved && selectedInList;
+  const showTestPrint = Boolean(saved && status?.online && selectedInList);
 
   let statusLine = "Select your receipt printer (e.g. BillQuick Lite), then Save.";
   let statusClass = "text-muted-foreground";
@@ -146,8 +146,8 @@ export function PrinterDialog({ open, onClose, onSaved }: Props) {
             <div className="min-w-0 space-y-1">
               <h2 className="font-semibold text-lg leading-tight">Connect printer</h2>
               <p className="text-muted-foreground text-sm leading-snug">
-                Use your 80mm receipt printer queue (BillQuick Lite on Windows), not an inkjet/PDF
-                printer.
+                Select the <strong>same printer name</strong> you use in Petpooja (e.g. BillQuick
+                Lite) — not HP/PDF printers.
               </p>
             </div>
             <button type="button" onClick={onClose} className="shrink-0 rounded-md border p-2">

@@ -439,8 +439,26 @@ ${o.notes.trim() ? `<div class="muted">Note: ${escapeHtml(o.notes.trim())}</div>
 
 type DesktopPrintBridge = {
   printSilentHtml: (html: string, title?: string) => Promise<{ ok: boolean; error?: string }>;
+  printReceiptText?: (text: string, title?: string) => Promise<{ ok: boolean; error?: string }>;
   getPlatform?: () => Promise<string>;
 };
+
+async function sendReceiptToDesktop(
+  desktop: DesktopPrintBridge,
+  platform: string,
+  plainText: string,
+  htmlDoc: string,
+  title: string,
+): Promise<void> {
+  if (platform === "win32" && desktop.printReceiptText) {
+    const r = await desktop.printReceiptText(plainText, title);
+    if (r.ok) return;
+    throw new Error(r.error || "Print failed");
+  }
+  const r = await desktop.printSilentHtml(htmlDoc, title);
+  if (r.ok) return;
+  throw new Error(r.error || "Print failed");
+}
 
 export async function printPosBillThermal(
   options: PosBillPrintOptions,
@@ -449,16 +467,15 @@ export async function printPosBillThermal(
   if (!options.lines.length) {
     throw new Error("Nothing to print — cart is empty.");
   }
-  const platform = desktop?.getPlatform ? await desktop.getPlatform() : "";
+  if (!desktop?.printSilentHtml) return;
+
+  const platform = desktop.getPlatform ? await desktop.getPlatform() : "";
   const plain = usePlainTextReceipt(platform);
+  const plainText = buildBillPlainText(options);
   const doc = plain
-    ? wrapPlainTextPrintDocument(buildBillPlainText(options), "Bill")
+    ? wrapPlainTextPrintDocument(plainText, "Bill")
     : wrapThermalPrintDocument(buildBillHtmlBody(options), "Bill");
-  if (desktop?.printSilentHtml) {
-    const r = await desktop.printSilentHtml(doc, "Bill");
-    if (r.ok) return;
-    throw new Error(r.error || "Print failed");
-  }
+  await sendReceiptToDesktop(desktop, platform, plainText, doc, "Bill");
 }
 
 export async function printPosKotThermal(
@@ -468,14 +485,13 @@ export async function printPosKotThermal(
   if (!options.lines.length) {
     throw new Error("Nothing to print — no KOT lines.");
   }
-  const platform = desktop?.getPlatform ? await desktop.getPlatform() : "";
+  if (!desktop?.printSilentHtml) return;
+
+  const platform = desktop.getPlatform ? await desktop.getPlatform() : "";
   const plain = usePlainTextReceipt(platform);
+  const plainText = buildKotPlainText(options);
   const doc = plain
-    ? wrapPlainTextPrintDocument(buildKotPlainText(options), "KOT")
+    ? wrapPlainTextPrintDocument(plainText, "KOT")
     : wrapThermalPrintDocument(buildKotHtmlBody(options), "KOT");
-  if (desktop?.printSilentHtml) {
-    const r = await desktop.printSilentHtml(doc, "KOT");
-    if (r.ok) return;
-    throw new Error(r.error || "Print failed");
-  }
+  await sendReceiptToDesktop(desktop, platform, plainText, doc, "KOT");
 }

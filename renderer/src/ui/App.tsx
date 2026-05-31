@@ -159,6 +159,8 @@ export function App() {
   const [lastBill, setLastBill] = useState<{ orderRef: string } | null>(null);
   const [printerDialogOpen, setPrinterDialogOpen] = useState(false);
   const [printerConnected, setPrinterConnected] = useState(false);
+  /** Saved queue exists and Windows reports online — can attempt print. */
+  const [printerReady, setPrinterReady] = useState(false);
 
   const [dialogItem, setDialogItem] = useState<MenuItem | null>(null);
   const [variationId, setVariationId] = useState("");
@@ -213,13 +215,21 @@ export function App() {
   const refreshPrinterStatus = useCallback(async () => {
     if (!desktop?.getPrinterStatus) {
       setPrinterConnected(false);
+      setPrinterReady(false);
       return;
     }
     try {
       const status = await desktop.getPrinterStatus();
-      setPrinterConnected(Boolean(status.ok && status.connected));
+      if (status.ok) {
+        setPrinterReady(Boolean(status.saved && status.online));
+        setPrinterConnected(Boolean(status.connected));
+      } else {
+        setPrinterConnected(false);
+        setPrinterReady(false);
+      }
     } catch {
       setPrinterConnected(false);
+      setPrinterReady(false);
     }
   }, [desktop]);
 
@@ -628,8 +638,8 @@ export function App() {
         setError("Add at least one item.");
         return;
       }
-      if (printMode !== "none" && !printerConnected) {
-        setError("Connect printer to enable printing.");
+      if (printMode !== "none" && !printerReady) {
+        setError("Connect printer, save BillQuick Lite (or your receipt printer), and run Test print.");
         return;
       }
       if (fulfillment === "delivery" && !address.trim()) {
@@ -770,7 +780,7 @@ export function App() {
       posSettings,
       paymentDisplayName,
       refreshSyncStatus,
-      printerConnected,
+      printerReady,
       customerName,
       phone,
       address,
@@ -1070,12 +1080,12 @@ export function App() {
           sessionId={session.id}
           refreshKey={ordersRefreshKey}
           posSettings={posSettings}
-          printerConnected={printerConnected}
+          printerConnected={printerReady}
         />
       ) : mainTab === "reports" ? (
         <ReportsPanel refreshKey={ordersRefreshKey} />
       ) : mainTab === "pos" ? (
-      <div className="grid min-h-0 min-w-0 grid-cols-1 overflow-hidden max-lg:grid-rows-[minmax(0,1fr)_minmax(min(34rem,58dvh),auto)] lg:grid-cols-[1fr_520px]">
+      <div className="grid min-h-0 min-w-0 grid-cols-1 overflow-hidden max-lg:grid-rows-[minmax(0,1fr)_minmax(0,1fr)] lg:grid-cols-[1fr_520px]">
         <section className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r">
           <div className="shrink-0 border-b bg-muted/30 p-3">
             <div className="relative">
@@ -1201,7 +1211,7 @@ export function App() {
           </div>
         </section>
 
-        <aside className="flex min-h-0 min-w-0 w-full shrink-0 flex-col overflow-hidden border-l bg-muted/20 max-lg:min-h-[min(34rem,58dvh)] lg:w-[520px]">
+        <aside className="flex min-h-0 min-w-0 w-full shrink-0 flex-col overflow-hidden border-l bg-muted/20 lg:w-[520px]">
           <div className="shrink-0 border-b p-3">
             <p className="mb-2 font-medium text-sm">Order type</p>
             <div className="flex flex-wrap gap-2">
@@ -1317,13 +1327,13 @@ export function App() {
             </div>
           </details>
 
-          <div className="flex min-h-[29.5rem] flex-1 flex-col overflow-hidden">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             <div className="shrink-0 px-4 pt-4 pb-2">
               <h2 className="font-semibold">Preview</h2>
               <p className="mt-1 text-muted-foreground text-xs">{fulfillmentLabel(fulfillment)}</p>
             </div>
 
-            <div className="min-h-[calc(4.5rem*6+0.5rem*5)] flex-1 overflow-y-auto overflow-x-hidden px-4">
+            <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-4">
               {cart.length === 0 ? (
                 <p className="text-muted-foreground text-sm">Tap items to add them.</p>
               ) : (
@@ -1483,7 +1493,7 @@ export function App() {
                     "Save"
                   )}
                 </button>
-                {!printerConnected ? (
+                {!printerReady ? (
                   <button
                     type="button"
                     onClick={() => setPrinterDialogOpen(true)}
@@ -1495,7 +1505,7 @@ export function App() {
                 <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-3">
                   <button
                     type="button"
-                    disabled={isSubmitting || cart.length === 0 || !printerConnected}
+                    disabled={isSubmitting || cart.length === 0 || !printerReady}
                     onClick={() => void submitPosOrder("kot")}
                     className="flex h-10 min-w-0 items-center justify-center rounded-md border px-2 text-sm disabled:opacity-50"
                   >
@@ -1507,7 +1517,7 @@ export function App() {
                   </button>
                   <button
                     type="button"
-                    disabled={isSubmitting || cart.length === 0 || !printerConnected}
+                    disabled={isSubmitting || cart.length === 0 || !printerReady}
                     onClick={() => void submitPosOrder("bill")}
                     className="flex h-10 min-w-0 items-center justify-center rounded-md border px-2 text-sm disabled:opacity-50"
                   >
@@ -1519,7 +1529,7 @@ export function App() {
                   </button>
                   <button
                     type="button"
-                    disabled={isSubmitting || cart.length === 0 || !printerConnected}
+                    disabled={isSubmitting || cart.length === 0 || !printerReady}
                     onClick={() => void submitPosOrder("both")}
                     className="flex h-10 min-w-0 items-center justify-center rounded-md border px-2 text-sm disabled:opacity-50"
                   >

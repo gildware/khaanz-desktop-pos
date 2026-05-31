@@ -156,7 +156,7 @@ On Windows the app uses a **plain-text receipt layout** (Courier, no tables) and
 2. In Khaanz POS, click **Connect printer** → select **BillQuick Lite** → **Save printer** → **Test print**.
 3. When the header shows **Printer connected**, use **Save & Bill** / **Save & Print** on orders.
 
-On Windows, receipts are sent as **plain text** via PowerShell `Out-Printer` (reliable for BillQuick Lite / Generic Text drivers). macOS uses HTML silent print.
+On Windows, printing tries the same approaches as Petpooja-style POS apps: **GDI driver print** first (BillQuick Lite / POS 203DPI), then legacy `print` command, then raw text. Pick the **same printer queue name** as in Petpooja. macOS uses HTML silent print.
 
 If the queue name differs, set `KHAANZ_SILENT_PRINTER` to the exact name from the list-printers command below.
 

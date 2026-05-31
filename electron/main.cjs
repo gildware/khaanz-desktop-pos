@@ -812,6 +812,42 @@ async function printPlainTextViaHtmlWindow(plainText, title) {
   return printSilentHtml({ html: doc, title: title || "Receipt" });
 }
 
+/** Direct receipt print — Windows uses ESC/POS RAW (no HTML window). */
+async function printReceiptText({ text, title }) {
+  const body = String(text || "").trim();
+  if (!body) {
+    return { ok: false, error: "Nothing to print." };
+  }
+
+  const saved = resolveSavedPrinterName();
+  if (!saved) {
+    return {
+      ok: false,
+      error: "No printer saved. Open Connect printer, choose your receipt printer, and Save.",
+    };
+  }
+
+  if (process.platform === "win32") {
+    const onlineCheck = await isPrinterOnlineOnOs(saved);
+    const printName = onlineCheck.name || saved;
+    if (!onlineCheck.online) {
+      return {
+        ok: false,
+        error:
+          onlineCheck.detail ||
+          `“${saved}” is offline. Connect the printer in Windows, then Refresh.`,
+      };
+    }
+    const r = await printPlainTextWindows(printName, body, title || "Receipt");
+    if (r.ok && r.deviceName && r.deviceName !== saved) {
+      writeSilentPrinterNameToDb(db, r.deviceName);
+    }
+    return r;
+  }
+
+  return printPlainTextViaHtmlWindow(body, title || "Receipt");
+}
+
 async function printSilentHtml({ html, title }) {
   const max = 600_000;
   if (!html || typeof html !== "string" || html.length > max) {
@@ -900,7 +936,7 @@ async function printSilentHtml({ html, title }) {
         }
 
         if (process.platform === "win32") {
-          const r = await printPlainTextWindows(chosen, plainText);
+          const r = await printPlainTextWindows(chosen, plainText, safeTitle);
           if (r.ok && r.deviceName && r.deviceName !== saved) {
             writeSilentPrinterNameToDb(db, r.deviceName);
           }
@@ -1496,6 +1532,12 @@ function registerIpc() {
     return printSilentHtml({ html, title });
   });
 
+  ipcMain.handle("khaanz:print-receipt-text", async (_evt, payload) => {
+    const text = payload && typeof payload.text === "string" ? payload.text : "";
+    const title = payload && typeof payload.title === "string" ? payload.title : "Receipt";
+    return printReceiptText({ text, title });
+  });
+
   ipcMain.handle("khaanz:get-printer-status", async () => {
     try {
       return { ok: true, ...(await getPrinterConnectionStatus()) };
@@ -1532,10 +1574,7 @@ function registerIpc() {
     const printName =
       process.platform === "win32" && onlineCheck.name ? onlineCheck.name : saved;
     const sample = buildTestPrintPlainText();
-    const r =
-      process.platform === "win32"
-        ? await printPlainTextWindows(printName, sample)
-        : await printPlainTextViaHtmlWindow(sample, "Test print");
+    const r = await printReceiptText({ text: sample, title: "Test print" });
     if (r.ok) {
       const verifiedName =
         process.platform === "win32" && r.deviceName ? r.deviceName : printName;
