@@ -148,6 +148,16 @@ Packaged apps check GitHub for updates on startup (and via `khaanzDesktop.checkF
 | `KHAANZ_SYNC_KEY` | Shared secret header for sync when required by your API. |
 | `KHAANZ_SILENT_PRINTER` | Optional exact OS printer name for silent receipts. |
 
+### Windows thermal printers (BillQuick Lite, POS 203DPI, etc.)
+
+On Windows the app uses a **plain-text receipt layout** (Courier, no tables) and driver-friendly print settings — custom paper size/DPI often causes blank or black prints on ESC/POS queue drivers.
+
+1. In **Settings → Printers**, confirm **BillQuick Lite** (or your exact queue name) appears.
+2. In Khaanz POS, click **Connect printer** and select **BillQuick Lite** → **Save printer**.
+3. Print a test **Bill** or **KOT** from the cart.
+
+If the queue name differs, set `KHAANZ_SILENT_PRINTER` to the exact name from the list-printers command below.
+
 ### List printer names (macOS / Windows)
 
 From `pos-desktop` after `npm install`:

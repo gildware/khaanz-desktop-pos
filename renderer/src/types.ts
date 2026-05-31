@@ -240,6 +240,7 @@ export type PosDesktopApi = {
 
 export type KhaanzDesktopApi = {
   isDesktop: true;
+  getPlatform: () => Promise<string>;
   syncNow: () => Promise<
     | { ok: true; serverTime?: string; lastMenuPullAt?: string | null }
     | { ok: false; error: string; userDataEnvPath?: string }

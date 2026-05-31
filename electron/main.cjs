@@ -6,6 +6,10 @@ const {
   normalizeApiOrigin,
 } = require("./backend-config.cjs");
 const { wrapThermalPrintDocument } = require("./thermal-print.cjs");
+const {
+  getThermalPrintOptions,
+  getPrintWindowSize,
+} = require("./thermal-print-windows.cjs");
 const path = require("path");
 const os = require("os");
 const fs = require("fs");
@@ -642,7 +646,8 @@ async function waitForPrintDocumentReady(webContents) {
       }
     })
   `);
-  await new Promise((r) => setTimeout(r, 400));
+  const extraMs = process.platform === "win32" ? 600 : 400;
+  await new Promise((r) => setTimeout(r, extraMs));
 }
 
 async function printSilentHtml({ html, title }) {
@@ -661,10 +666,11 @@ async function printSilentHtml({ html, title }) {
   fs.writeFileSync(tempFile, doc, "utf8");
 
   return new Promise((resolve) => {
+    const winSize = getPrintWindowSize();
     const win = new BrowserWindow({
       show: false,
-      width: 420,
-      height: 1200,
+      width: winSize.width,
+      height: winSize.height,
       backgroundColor: "#ffffff",
       webPreferences: { sandbox: false },
     });
@@ -737,15 +743,7 @@ async function printSilentHtml({ html, title }) {
         }, 20_000);
 
         win.webContents.print(
-          {
-            silent: true,
-            printBackground: false,
-            color: false,
-            deviceName: chosen,
-            margins: { marginType: "custom", top: 0, bottom: 0, left: 0, right: 0 },
-            pageSize: { width: 80000, height: 300000 },
-            dpi: { horizontal: 203, vertical: 203 },
-          },
+          getThermalPrintOptions(chosen),
           (success, failureReason) => {
             if (printSettled) return;
             printSettled = true;
@@ -1163,6 +1161,8 @@ function restartSyncLoop() {
 }
 
 function registerIpc() {
+  ipcMain.handle("pos:platform", () => process.platform);
+
   ipcMain.handle("pos:bootstrap", async () => {
     const deviceId = getOrCreateDeviceId(db);
     const stored = applyStoredBackendToProcessEnv();

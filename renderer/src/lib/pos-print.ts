@@ -226,6 +226,113 @@ function splitLines(text: string): string[] {
   return text.replace(/\r\n/g, "\n").split("\n").filter((l) => l.length > 0);
 }
 
+/** 80mm thermal — ~42 chars (BillQuick Lite / POS 203DPI on Windows). */
+const PLAIN_WIDTH = 42;
+
+function centerPlain(text: string, width = PLAIN_WIDTH): string {
+  const t = text.trim();
+  if (t.length >= width) return t.slice(0, width);
+  const pad = Math.floor((width - t.length) / 2);
+  return `${" ".repeat(pad)}${t}`;
+}
+
+function padPlain(left: string, right: string, width = PLAIN_WIDTH): string {
+  const r = right.trim();
+  const maxLeft = Math.max(1, width - r.length - 1);
+  const l = left.trim().slice(0, maxLeft);
+  return `${l}${" ".repeat(Math.max(1, width - l.length - r.length))}${r}`;
+}
+
+function plainRule(width = PLAIN_WIDTH): string {
+  return "-".repeat(width);
+}
+
+export function usePlainTextReceipt(platform?: string): boolean {
+  return platform === "win32";
+}
+
+export function wrapPlainTextPrintDocument(text: string, title: string): string {
+  const safeTitle = escapeHtml(title || "Receipt");
+  const body = escapeHtml(text);
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><meta name="color-scheme" content="light only"/><title>${safeTitle}</title><style>
+  html, body { margin: 0; padding: 2mm; background: #fff !important; color: #000 !important; color-scheme: light only; }
+  pre { margin: 0; font-family: "Courier New", Courier, monospace; font-size: 12px; font-weight: 700; line-height: 1.35; white-space: pre-wrap; word-break: break-word; }
+</style></head><body><pre>${body}</pre></body></html>`;
+}
+
+export function buildBillPlainText(o: PosBillPrintOptions): string {
+  const lines: string[] = [];
+  lines.push(centerPlain(o.restaurantName));
+  for (const h of splitLines(o.billHeader)) lines.push(centerPlain(h));
+  lines.push(plainRule());
+  const headerLine = o.proforma
+    ? `PROFORMA · ${o.fulfillmentLabel}`
+    : `${o.orderRef ?? "Order"} · ${o.fulfillmentLabel}`;
+  lines.push(headerLine.slice(0, PLAIN_WIDTH));
+  lines.push(new Date().toLocaleString("en-IN").slice(0, PLAIN_WIDTH));
+  if (o.dineInTable?.trim()) lines.push(`Table: ${o.dineInTable.trim()}`.slice(0, PLAIN_WIDTH));
+  const customer =
+    !o.phoneDigits || o.phoneDigits === "0000000000"
+      ? o.customerName
+      : `${o.customerName} · +91 ${o.phoneDigits}`;
+  lines.push(customer.slice(0, PLAIN_WIDTH));
+  if (o.footerNote?.trim()) lines.push(o.footerNote.trim().slice(0, PLAIN_WIDTH));
+  if (o.notes.trim()) lines.push(`Note: ${o.notes.trim()}`.slice(0, PLAIN_WIDTH));
+  lines.push(plainRule());
+  lines.push(padPlain("Item", "Qty  Amt"));
+  for (const r of o.lines) {
+    lines.push(
+      padPlain(r.label, `${r.qty}  ₹${Math.round(r.subtotal)}`.slice(0, 16)),
+    );
+    for (const a of r.addonRows ?? []) {
+      lines.push(
+        padPlain(`+ ${a.name}`, `${a.qty}  ₹${Math.round(a.subtotal)}`.slice(0, 16)),
+      );
+    }
+  }
+  lines.push(plainRule());
+  const itemsSub =
+    o.itemsSubtotal ?? o.lines.reduce((s, r) => s + r.subtotal, 0);
+  if (itemsSub > 0 && (o.deliveryCharge || o.discount)) {
+    lines.push(padPlain("Subtotal", `₹${Math.round(itemsSub)}`));
+  }
+  if (o.deliveryCharge && o.deliveryCharge > 0) {
+    lines.push(padPlain("Delivery", `₹${Math.round(o.deliveryCharge)}`));
+  }
+  if (o.discount && o.discount > 0) {
+    lines.push(padPlain("Discount", `-₹${Math.round(o.discount)}`));
+  }
+  lines.push(padPlain("TOTAL", `₹${Math.round(o.total)}`));
+  if (o.paymentLabel) lines.push(`Payment: ${o.paymentLabel}`.slice(0, PLAIN_WIDTH));
+  for (const f of splitLines(o.billFooter)) lines.push(f.slice(0, PLAIN_WIDTH));
+  lines.push(centerPlain("Thank you"));
+  lines.push("");
+  return lines.join("\n");
+}
+
+export function buildKotPlainText(o: PosKotPrintOptions): string {
+  const lines: string[] = [];
+  lines.push(centerPlain("KITCHEN ORDER"));
+  lines.push(centerPlain(o.restaurantName));
+  for (const h of splitLines(o.billHeader)) lines.push(centerPlain(h));
+  lines.push(plainRule());
+  lines.push(o.orderRef.slice(0, PLAIN_WIDTH));
+  lines.push(o.fulfillmentLabel.slice(0, PLAIN_WIDTH));
+  if (o.dineInTable?.trim()) lines.push(`Table: ${o.dineInTable.trim()}`.slice(0, PLAIN_WIDTH));
+  lines.push(new Date().toLocaleString("en-IN").slice(0, PLAIN_WIDTH));
+  if (o.notes.trim()) lines.push(`Note: ${o.notes.trim()}`.slice(0, PLAIN_WIDTH));
+  lines.push(plainRule());
+  lines.push(padPlain("Item", "Qty"));
+  for (const r of o.lines) {
+    lines.push(padPlain(r.label, String(r.qty)));
+    for (const a of r.addonRows ?? []) {
+      lines.push(padPlain(`+ ${a.name}`, String(a.qty)));
+    }
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
 export function buildBillHtmlBody(o: PosBillPrintOptions): string {
   const headerLines = splitLines(o.billHeader);
   const footerLines = splitLines(o.billFooter);
@@ -330,15 +437,23 @@ ${o.notes.trim() ? `<div class="muted">Note: ${escapeHtml(o.notes.trim())}</div>
 `;
 }
 
+type DesktopPrintBridge = {
+  printSilentHtml: (html: string, title?: string) => Promise<{ ok: boolean; error?: string }>;
+  getPlatform?: () => Promise<string>;
+};
+
 export async function printPosBillThermal(
   options: PosBillPrintOptions,
-  desktop?: { printSilentHtml: (html: string, title?: string) => Promise<{ ok: boolean; error?: string }> },
+  desktop?: DesktopPrintBridge,
 ): Promise<void> {
-  const body = buildBillHtmlBody(options);
-  if (!body.trim() || !options.lines.length) {
+  if (!options.lines.length) {
     throw new Error("Nothing to print — cart is empty.");
   }
-  const doc = wrapThermalPrintDocument(body, "Bill");
+  const platform = desktop?.getPlatform ? await desktop.getPlatform() : "";
+  const plain = usePlainTextReceipt(platform);
+  const doc = plain
+    ? wrapPlainTextPrintDocument(buildBillPlainText(options), "Bill")
+    : wrapThermalPrintDocument(buildBillHtmlBody(options), "Bill");
   if (desktop?.printSilentHtml) {
     const r = await desktop.printSilentHtml(doc, "Bill");
     if (r.ok) return;
@@ -348,13 +463,16 @@ export async function printPosBillThermal(
 
 export async function printPosKotThermal(
   options: PosKotPrintOptions,
-  desktop?: { printSilentHtml: (html: string, title?: string) => Promise<{ ok: boolean; error?: string }> },
+  desktop?: DesktopPrintBridge,
 ): Promise<void> {
-  const body = buildKotHtmlBody(options);
-  if (!body.trim() || !options.lines.length) {
+  if (!options.lines.length) {
     throw new Error("Nothing to print — no KOT lines.");
   }
-  const doc = wrapThermalPrintDocument(body, "KOT");
+  const platform = desktop?.getPlatform ? await desktop.getPlatform() : "";
+  const plain = usePlainTextReceipt(platform);
+  const doc = plain
+    ? wrapPlainTextPrintDocument(buildKotPlainText(options), "KOT")
+    : wrapThermalPrintDocument(buildKotHtmlBody(options), "KOT");
   if (desktop?.printSilentHtml) {
     const r = await desktop.printSilentHtml(doc, "KOT");
     if (r.ok) return;

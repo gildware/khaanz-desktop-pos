@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld("posDesktop", {
  */
 contextBridge.exposeInMainWorld("khaanzDesktop", {
   isDesktop: true,
+  getPlatform: () => invoke("pos:platform"),
   checkForUpdates: () => invoke("app:check-for-updates"),
   onUpdateStatus: (callback) => {
     const listener = (_evt, payload) => callback(payload);
