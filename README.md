@@ -87,13 +87,19 @@ open "release/mac-arm64/Khaanz POS.app"
 
 Icons use `logo/khaanz-logo.pdf.png` (`build.icon` in `package.json`). Rebuild with `npm run dist` after replacing the file.
 
-## GitHub Releases
+## GitHub Releases (CI)
 
-Tag pushes matching `v*` run `.github/workflows/pos-desktop-release.yml` at the **monorepo root** (`khaanz-dev`).
+Pushing to **`main`** or tagging **`v*`** runs [`.github/workflows/release.yml`](.github/workflows/release.yml) on [gildware/khaanz-desktop-pos](https://github.com/gildware/khaanz-desktop-pos):
 
-## Hosting installers for admin Settings
+- **macOS:** `.dmg` + `.zip` (zip is used for in-app auto-update)
+- **Windows:** NSIS `.exe` + `.zip`
+- Each `main` push gets version `0.1.<run-number>` so installed apps can update via `electron-updater`
 
-Upload the `.dmg` / `.exe` to any HTTPS host, then set in your Next.js (`khaanz`) deployment:
+Packaged apps check GitHub for updates on startup (and via `khaanzDesktop.checkForUpdates()`).
+
+## Admin download links (khaanz)
+
+**Settings → POS app** loads the latest release from GitHub automatically (`DESKTOP_POS_GITHUB_REPO`, default `gildware/khaanz-desktop-pos`). Optional env overrides:
 
 - `NEXT_PUBLIC_DESKTOP_POS_MAC_URL`
 - `NEXT_PUBLIC_DESKTOP_POS_WINDOWS_URL`

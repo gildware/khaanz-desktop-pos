@@ -26,6 +26,12 @@ contextBridge.exposeInMainWorld("posDesktop", {
  */
 contextBridge.exposeInMainWorld("khaanzDesktop", {
   isDesktop: true,
+  checkForUpdates: () => invoke("app:check-for-updates"),
+  onUpdateStatus: (callback) => {
+    const listener = (_evt, payload) => callback(payload);
+    ipcRenderer.on("app:update-status", listener);
+    return () => ipcRenderer.removeListener("app:update-status", listener);
+  },
   printSilentHtml: (html, title) =>
     invoke("khaanz:print-silent-html", { html, title }),
   listPrinters: () => invoke("khaanz:list-printers"),

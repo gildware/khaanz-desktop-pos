@@ -13,6 +13,7 @@
     "build:renderer": "npm --prefix renderer run build",
     "predist": "npm run build:renderer",
     "dist": "electron-builder --publish never",
+    "dist:publish": "electron-builder --publish always",
     "start": "electron ."
   },
   "devDependencies": {
@@ -24,11 +25,17 @@
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0",
+    "electron-updater": "^6.8.3",
     "zod": "^4.1.5"
   },
   "build": {
     "appId": "com.khaanz.pos.desktop",
     "productName": "Khaanz POS",
+    "publish": {
+      "provider": "github",
+      "owner": "gildware",
+      "repo": "khaanz-desktop-pos"
+    },
     "icon": "logo/khaanz-logo.pdf.png",
     "directories": {
       "output": "release"
@@ -51,11 +58,16 @@
     ],
     "mac": {
       "category": "public.app-category.business",
-      "target": ["dmg", "zip"]
+      "target": [
+        "dmg",
+        "zip"
+      ]
     },
     "win": {
-      "target": ["nsis", "zip"]
+      "target": [
+        "nsis",
+        "zip"
+      ]
     }
   }
 }
-

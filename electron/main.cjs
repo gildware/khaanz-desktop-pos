@@ -1,4 +1,5 @@
 const { app, BrowserWindow, ipcMain, net } = require("electron");
+const { initAutoUpdater, autoUpdater } = require("./auto-updater.cjs");
 const path = require("path");
 const os = require("os");
 const fs = require("fs");
@@ -1604,9 +1605,23 @@ app.whenReady().then(() => {
   registerIpc();
   startSyncLoop();
   mainWindow = createMainWindow();
+  initAutoUpdater(mainWindow, { isDev });
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) mainWindow = createMainWindow();
+    if (BrowserWindow.getAllWindows().length === 0) {
+      mainWindow = createMainWindow();
+      initAutoUpdater(mainWindow, { isDev });
+    }
   });
+});
+
+ipcMain.handle("app:check-for-updates", async () => {
+  if (isDev) return { ok: false, error: "Updates are disabled in development" };
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    return { ok: true, version: result?.updateInfo?.version ?? null };
+  } catch (e) {
+    return { ok: false, error: e?.message ?? String(e) };
+  }
 });
 
 app.on("window-all-closed", () => {
