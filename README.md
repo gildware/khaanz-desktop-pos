@@ -76,8 +76,9 @@ Server endpoints:
 
 For a **packaged** desktop build (installed `.dmg` / `.exe`), connect from the app:
 
-1. On the **login screen** — **Connect to your Khaanz site** (domain + sync key), then **Save & connect**
-2. After sign-in — **Settings** tab to change domain or sync key anytime
+1. On first launch — **Connect to your Khaanz site** (domain + sync key), then **Save & connect**
+2. **PIN only** to sign in (no staff picker); use **Change server** on the login screen to reconnect
+3. After sign-in — **Settings** tab to change domain or sync key anytime
 
 The sync key must match `POS_SYNC_KEY` on your Khaanz server. Domain is stored as `https://your-domain.com` (no trailing slash).
 

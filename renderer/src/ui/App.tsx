@@ -126,9 +126,8 @@ export function App() {
     userDataEnvPath: string;
     lastMenuPullAt: string | null;
   } | null>(null);
-  const [users, setUsers] = useState<Array<{ id: string; displayName: string; role: string }>>([]);
-  const [userId, setUserId] = useState("");
   const [pin, setPin] = useState("");
+  const [showServerSetup, setShowServerSetup] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -285,12 +284,6 @@ export function App() {
           userDataEnvPath: b.userDataEnvPath ?? "",
           lastMenuPullAt: b.lastMenuPullAt ?? null,
         });
-      }
-      const u = await api.listUsers();
-      if (!alive) return;
-      if (u.ok) {
-        setUsers(u.users);
-        if (u.users[0]) setUserId(u.users[0].id);
       }
     })().catch((e) => setError(String(e instanceof Error ? e.message : e)));
     return () => {
@@ -489,7 +482,7 @@ export function App() {
     setError("");
     setBusy(true);
     try {
-      const r = await api.loginWithPin(userId, pin);
+      const r = await api.loginWithPinOnly(pin);
       if (!r.ok) {
         setError(r.error);
         return;
@@ -605,6 +598,7 @@ export function App() {
       syncConfigured: boolean;
       lastMenuPullAt?: string | null;
     }) => {
+      setShowServerSetup(false);
       setBoot((prev) =>
         prev
           ? {
@@ -782,20 +776,50 @@ export function App() {
   const isPlacing = placingAction !== null;
 
   if (!session) {
+    const needsServer = !boot?.syncConfigured || showServerSetup;
     const loginOnline = isOnline === true;
     const loginOffline = isOnline === false;
+
+    if (needsServer) {
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-muted/40 p-6">
+          <div className="w-full max-w-md space-y-4 rounded-2xl border bg-card p-8 shadow-lg">
+            <div>
+              <h1 className="font-semibold text-2xl">Khaanz POS</h1>
+              <p className="mt-2 text-muted-foreground text-sm">
+                Connect this register to your Khaanz website before signing in.
+              </p>
+            </div>
+            <BackendConnectionPanel
+              api={api}
+              variant="login"
+              onSaved={(info) => void handleBackendSaved(info)}
+            />
+            {boot?.syncConfigured && showServerSetup ? (
+              <button
+                type="button"
+                className="w-full text-center text-muted-foreground text-sm underline underline-offset-4 hover:text-foreground"
+                onClick={() => {
+                  setShowServerSetup(false);
+                  setError("");
+                }}
+              >
+                Back to sign in
+              </button>
+            ) : null}
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="flex min-h-screen items-center justify-center bg-muted/40 p-6">
-        <div className="w-full max-w-md space-y-6 rounded-2xl border bg-card p-8 shadow-lg">
+        <div className="w-full max-w-sm space-y-6 rounded-2xl border bg-card p-8 shadow-lg">
           <div>
             <h1 className="font-semibold text-2xl">Khaanz POS</h1>
             <p
               className={`mt-1 flex items-center gap-2 text-sm ${
-                loginOnline
-                  ? "text-emerald-700"
-                  : loginOffline
-                    ? "text-muted-foreground"
-                    : "text-muted-foreground"
+                loginOnline ? "text-emerald-700" : "text-muted-foreground"
               }`}
             >
               {loginOnline ? (
@@ -803,37 +827,20 @@ export function App() {
               ) : (
                 <WifiOffIcon className="size-4" />
               )}
-              {isOnline === null ? "Checking connection…" : loginOnline ? "Online" : "Offline"}
+              {isOnline === null
+                ? "Checking connection…"
+                : loginOnline
+                  ? "Connected"
+                  : "Offline"}
             </p>
-            <p className="mt-2 text-muted-foreground text-xs">
-              Device <code className="rounded bg-muted px-1 py-0.5">{boot?.deviceId || "…"}</code>
-            </p>
+            {boot?.apiOrigin ? (
+              <p className="mt-1 text-muted-foreground text-xs">
+                Server: <span className="font-medium text-foreground">{boot.apiOrigin}</span>
+              </p>
+            ) : null}
           </div>
 
-          <BackendConnectionPanel
-            api={api}
-            variant="login"
-            onSaved={(info) => void handleBackendSaved(info)}
-          />
-
-          <div className="space-y-4 border-t pt-4">
-            <p className="font-medium text-sm">Sign in</p>
-            <label className="grid gap-2">
-              <span className="font-medium text-sm">Staff</span>
-              <select
-                value={userId}
-                onChange={(e) => setUserId(e.target.value)}
-                disabled={busy}
-                className="h-11 rounded-lg border bg-background px-3 text-sm"
-              >
-                {users.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.displayName} ({u.role})
-                  </option>
-                ))}
-              </select>
-            </label>
-
+          <div className="space-y-4">
             <label className="grid gap-2">
               <span className="font-medium text-sm">PIN</span>
               <input
@@ -842,7 +849,8 @@ export function App() {
                 type="password"
                 inputMode="numeric"
                 disabled={busy}
-                className="h-11 rounded-lg border bg-background px-3 font-mono tracking-widest"
+                autoFocus
+                className="h-11 rounded-lg border bg-background px-3 text-center font-mono text-lg tracking-[0.3em]"
                 placeholder="••••"
                 onKeyDown={(e) => {
                   if (e.key === "Enter") void doLogin();
@@ -853,17 +861,29 @@ export function App() {
             <button
               type="button"
               onClick={() => void doLogin()}
-              disabled={busy || !userId || pin.length < 2}
+              disabled={busy || pin.length < 2}
               className="flex h-11 w-full items-center justify-center rounded-lg bg-primary font-medium text-primary-foreground text-sm disabled:opacity-50"
             >
               {busy ? <Loader2Icon className="size-4 animate-spin" /> : "Sign in"}
             </button>
 
-            <p className="text-muted-foreground text-xs">
-              Default manager PIN is <code className="rounded bg-muted px-1">1234</code> until you sync staff from the server.
+            <button
+              type="button"
+              className="w-full text-center text-muted-foreground text-sm underline underline-offset-4 hover:text-foreground"
+              onClick={() => {
+                setShowServerSetup(true);
+                setError("");
+              }}
+            >
+              Change server
+            </button>
+
+            <p className="text-muted-foreground text-center text-xs">
+              First-time PIN is often <code className="rounded bg-muted px-1">1234</code> until
+              staff are synced from the server.
             </p>
 
-            {error ? <p className="text-destructive text-sm">{error}</p> : null}
+            {error ? <p className="text-destructive text-center text-sm">{error}</p> : null}
           </div>
         </div>
       </div>

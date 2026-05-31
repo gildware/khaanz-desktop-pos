@@ -194,6 +194,7 @@ export type PosDesktopApi = {
     userId: string,
     pin: string,
   ) => Promise<{ ok: true; session: Session } | { ok: false; error: string }>;
+  loginWithPinOnly: (pin: string) => Promise<{ ok: true; session: Session } | { ok: false; error: string }>;
   logout: (sessionId: string) => Promise<{ ok: true } | { ok: false; error: string }>;
   listMenuItems: (
     sessionId: string,

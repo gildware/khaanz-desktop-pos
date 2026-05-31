@@ -1184,6 +1184,21 @@ function registerIpc() {
     }
   });
 
+  function createSessionForUser(u) {
+    const sid = randomId("sess");
+    const t = nowIso();
+    db.prepare(
+      "INSERT INTO sessions(id,user_id,created_at,last_seen_at,revoked_at) VALUES(?,?,?,?,NULL)",
+    ).run(sid, u.id, t, t);
+    return {
+      ok: true,
+      session: {
+        id: sid,
+        user: { id: u.id, displayName: u.display_name, role: u.role },
+      },
+    };
+  }
+
   ipcMain.handle("pos:loginWithPin", async (_evt, { userId, pin }) => {
     const u = db
       .prepare("SELECT id, display_name, pin_hash, role, active FROM users WHERE id=?")
@@ -1191,15 +1206,17 @@ function registerIpc() {
     if (!u || !u.active) return { ok: false, error: "Invalid user" };
     const pinHash = sha256Hex(String(pin || ""));
     if (pinHash !== u.pin_hash) return { ok: false, error: "Invalid PIN" };
-    const sid = randomId("sess");
-    const t = nowIso();
-    db.prepare("INSERT INTO sessions(id,user_id,created_at,last_seen_at,revoked_at) VALUES(?,?,?,?,NULL)").run(
-      sid,
-      u.id,
-      t,
-      t,
-    );
-    return { ok: true, session: { id: sid, user: { id: u.id, displayName: u.display_name, role: u.role } } };
+    return createSessionForUser(u);
+  });
+
+  ipcMain.handle("pos:loginWithPinOnly", async (_evt, { pin }) => {
+    const pinHash = sha256Hex(String(pin || ""));
+    const rows = db
+      .prepare("SELECT id, display_name, pin_hash, role, active FROM users WHERE active=1")
+      .all();
+    const match = rows.find((u) => u.pin_hash === pinHash);
+    if (!match) return { ok: false, error: "Invalid PIN" };
+    return createSessionForUser(match);
   });
 
   ipcMain.handle("pos:logout", async (_evt, { sessionId }) => {

@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld("posDesktop", {
     invoke("pos:test-backend-config", { apiOrigin, syncKey }),
   listUsers: () => invoke("pos:listUsers"),
   loginWithPin: (userId, pin) => invoke("pos:loginWithPin", { userId, pin }),
+  loginWithPinOnly: (pin) => invoke("pos:loginWithPinOnly", { pin }),
   logout: (sessionId) => invoke("pos:logout", { sessionId }),
   getSession: (sessionId) => invoke("pos:getSession", { sessionId }),
   listMenuItems: (sessionId) => invoke("pos:listMenuItems", { sessionId }),
