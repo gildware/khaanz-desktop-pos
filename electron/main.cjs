@@ -5,11 +5,16 @@ const {
   applyBackendConfig,
   normalizeApiOrigin,
 } = require("./backend-config.cjs");
-const { wrapThermalPrintDocument } = require("./thermal-print.cjs");
+const {
+  wrapThermalPrintDocument,
+  buildTestPrintPlainText,
+} = require("./thermal-print.cjs");
 const {
   getThermalPrintOptions,
   getPrintWindowSize,
 } = require("./thermal-print-windows.cjs");
+const { printPlainTextWindows } = require("./print-windows.cjs");
+const { checkWindowsPrinterOnline } = require("./printer-status-windows.cjs");
 const path = require("path");
 const os = require("os");
 const fs = require("fs");
@@ -630,9 +635,48 @@ function readSilentPrinterNameFromDb(db) {
 }
 
 function writeSilentPrinterNameToDb(db, deviceName) {
-  db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('silent_printer',?)").run(
-    String(deviceName || "").trim(),
-  );
+  const name = String(deviceName || "").trim();
+  db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('silent_printer',?)").run(name);
+  clearPrinterVerified(db);
+}
+
+function readPrinterVerifiedName(db) {
+  try {
+    const flag = db.prepare("SELECT value FROM meta WHERE key='printer_verified'").get();
+    if (!flag || flag.value !== "1") return "";
+    const row = db.prepare("SELECT value FROM meta WHERE key='printer_verified_name'").get();
+    return row && typeof row.value === "string" ? row.value.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+function setPrinterVerified(db, deviceName) {
+  const name = String(deviceName || "").trim();
+  db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('printer_verified','1')").run();
+  db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('printer_verified_name',?)").run(name);
+}
+
+function clearPrinterVerified(db) {
+  db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('printer_verified','0')").run();
+  db.prepare("DELETE FROM meta WHERE key='printer_verified_name'").run();
+}
+
+async function isPrinterOnlineOnOs(printerName) {
+  const name = String(printerName || "").trim();
+  if (!name) return { online: false, detail: "No printer selected" };
+  if (process.platform === "win32") {
+    const r = await checkWindowsPrinterOnline(name);
+    return { online: r.online, detail: r.detail || "" };
+  }
+  const printers = await getPrintersFromAnyWindow();
+  const hit = (printers || []).find((p) => p.name === name);
+  if (!hit) return { online: false, detail: "Printer not found" };
+  const reasons = hit.options && hit.options["printer-state-reasons"];
+  if (typeof reasons === "string" && /offline/i.test(reasons)) {
+    return { online: false, detail: "Printer reports offline" };
+  }
+  return { online: true, detail: "" };
 }
 
 async function waitForPrintDocumentReady(webContents) {
@@ -646,8 +690,103 @@ async function waitForPrintDocumentReady(webContents) {
       }
     })
   `);
-  const extraMs = process.platform === "win32" ? 600 : 400;
-  await new Promise((r) => setTimeout(r, extraMs));
+  await new Promise((r) => setTimeout(r, 400));
+}
+
+async function getPrintersFromAnyWindow() {
+  const wins = BrowserWindow.getAllWindows();
+  for (const w of wins) {
+    if (!w.isDestroyed()) {
+      try {
+        return await w.webContents.getPrintersAsync();
+      } catch {
+        /* try next */
+      }
+    }
+  }
+  const probe = new BrowserWindow({ show: false, webPreferences: { sandbox: false } });
+  try {
+    await probe.loadURL("about:blank");
+    return await probe.webContents.getPrintersAsync();
+  } finally {
+    if (!probe.isDestroyed()) probe.close();
+  }
+}
+
+function resolveSavedPrinterName() {
+  const fromEnv = (process.env.KHAANZ_SILENT_PRINTER || "").trim();
+  if (fromEnv) return fromEnv;
+  return readSilentPrinterNameFromDb(db);
+}
+
+/** Connected = saved + OS online + successful test print for this queue name. */
+async function getPrinterConnectionStatus() {
+  const saved = resolveSavedPrinterName();
+  const printers = await getPrintersFromAnyWindow();
+  const list = Array.isArray(printers) ? printers : [];
+  const inList = Boolean(saved && list.some((p) => p.name === saved));
+  const onlineCheck = saved ? await isPrinterOnlineOnOs(saved) : { online: false, detail: "" };
+  const verifiedName = readPrinterVerifiedName(db);
+  const verified = Boolean(saved && verifiedName === saved);
+  const online = inList && onlineCheck.online;
+  return {
+    saved: Boolean(saved),
+    available: inList,
+    online,
+    verified,
+    connected: verified && online,
+    deviceName: saved,
+    statusDetail: onlineCheck.detail || (inList ? "" : "Printer queue not found"),
+    printers: list.map((p) => ({
+      name: p.name,
+      isDefault: Boolean(p.isDefault),
+      status: p.status != null ? String(p.status) : undefined,
+    })),
+  };
+}
+
+function resolvePrinterForJob(printers, savedName) {
+  const list = Array.isArray(printers) ? printers : [];
+  const saved = String(savedName || "").trim();
+  if (saved && list.some((p) => p.name === saved)) return saved;
+  const def = list.find((p) => p.isDefault);
+  if (def?.name) return def.name;
+  return list[0]?.name?.trim() || "";
+}
+
+function printWebContentsAsync(webContents, options, timeoutMs = 60_000) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (result) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(
+      () => finish({ ok: false, error: "Print timed out" }),
+      timeoutMs,
+    );
+    try {
+      webContents.print(options, (success, failureReason) => {
+        if (!success) finish({ ok: false, error: failureReason || "Print failed" });
+        else finish({ ok: true });
+      });
+    } catch (e) {
+      finish({ ok: false, error: String(e && e.message ? e.message : e) });
+    }
+  });
+}
+
+async function printPlainTextViaHtmlWindow(plainText, title) {
+  const doc = wrapThermalPrintDocument(
+    `<pre>${String(plainText)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")}</pre>`,
+    title || "Receipt",
+  );
+  return printSilentHtml({ html: doc, title: title || "Receipt" });
 }
 
 async function printSilentHtml({ html, title }) {
@@ -713,45 +852,42 @@ async function printSilentHtml({ html, title }) {
     win.webContents.once("did-finish-load", async () => {
       try {
         await waitForPrintDocumentReady(win.webContents);
-        const hasText = await win.webContents.executeJavaScript(
-          `Boolean((document.body && document.body.innerText || "").trim().length)`,
+        const plainText = await win.webContents.executeJavaScript(
+          `(document.body && document.body.innerText) ? document.body.innerText : ""`,
         );
-        if (!hasText) {
+        if (!String(plainText || "").trim()) {
           settle({ ok: false, error: "Receipt is empty — nothing to print." });
           return;
         }
 
-        const configured = readSilentPrinterNameFromDb(db);
-        const fromEnv = (process.env.KHAANZ_SILENT_PRINTER || "").trim();
-        const deviceName = (fromEnv || configured).trim();
-        const printers = await win.webContents.getPrintersAsync();
-        const chosen =
-          deviceName && printers.some((p) => p.name === deviceName)
-            ? deviceName
-            : (printers.find((p) => p.isDefault)?.name || "").trim();
-
-        if (!chosen) {
-          settle({ ok: false, error: "No printer configured. Connect a printer first." });
+        const saved = resolveSavedPrinterName();
+        if (!saved) {
+          settle({
+            ok: false,
+            error: "No printer saved. Open Connect printer, choose BillQuick Lite, and Save.",
+          });
           return;
         }
 
-        let printSettled = false;
-        const printTimeout = setTimeout(() => {
-          if (printSettled) return;
-          printSettled = true;
-          settle({ ok: false, error: "Print timed out" });
-        }, 20_000);
+        const printers = await win.webContents.getPrintersAsync();
+        const chosen = resolvePrinterForJob(printers, saved);
+        if (!chosen) {
+          settle({ ok: false, error: "Printer not found. Reconnect it in Windows and Refresh." });
+          return;
+        }
 
-        win.webContents.print(
+        if (process.platform === "win32") {
+          const r = await printPlainTextWindows(chosen, plainText);
+          settle(r);
+          return;
+        }
+
+        const r = await printWebContentsAsync(
+          win.webContents,
           getThermalPrintOptions(chosen),
-          (success, failureReason) => {
-            if (printSettled) return;
-            printSettled = true;
-            clearTimeout(printTimeout);
-            if (!success) settle({ ok: false, error: failureReason || "Print failed" });
-            else settle({ ok: true });
-          },
+          60_000,
         );
+        settle(r);
       } catch (e) {
         settle({ ok: false, error: String(e && e.message ? e.message : e) });
       }
@@ -1334,26 +1470,71 @@ function registerIpc() {
     return printSilentHtml({ html, title });
   });
 
+  ipcMain.handle("khaanz:get-printer-status", async () => {
+    try {
+      return { ok: true, ...(await getPrinterConnectionStatus()) };
+    } catch (e) {
+      return {
+        ok: true,
+        saved: false,
+        available: false,
+        online: false,
+        verified: false,
+        connected: false,
+        deviceName: "",
+        printers: [],
+        error: String(e && e.message ? e.message : e),
+      };
+    }
+  });
+
+  ipcMain.handle("khaanz:test-print", async () => {
+    const saved = resolveSavedPrinterName();
+    if (!saved) {
+      return { ok: false, error: "Select a printer and Save first." };
+    }
+    const onlineCheck = await isPrinterOnlineOnOs(saved);
+    if (!onlineCheck.online) {
+      return {
+        ok: false,
+        error:
+          onlineCheck.detail ||
+          `“${saved}” is offline or not plugged in. Connect it in Windows, then Refresh.`,
+      };
+    }
+    const sample = buildTestPrintPlainText();
+    const r =
+      process.platform === "win32"
+        ? await printPlainTextWindows(saved, sample)
+        : await printPlainTextViaHtmlWindow(sample, "Test print");
+    if (r.ok) setPrinterVerified(db, saved);
+    return r;
+  });
+
   ipcMain.handle("khaanz:list-printers", async () => {
     try {
-      const win = BrowserWindow.getAllWindows()[0];
-      if (!win) return [];
-      return await win.webContents.getPrintersAsync();
+      return await getPrintersFromAnyWindow();
     } catch {
       return [];
     }
   });
 
   ipcMain.handle("khaanz:get-silent-printer", async () => {
-    const fromEnv = (process.env.KHAANZ_SILENT_PRINTER || "").trim();
-    if (fromEnv) return { deviceName: fromEnv };
-    return { deviceName: readSilentPrinterNameFromDb(db) };
+    return { deviceName: resolveSavedPrinterName() };
   });
 
   ipcMain.handle("khaanz:set-silent-printer", async (_evt, deviceName) => {
     try {
-      writeSilentPrinterNameToDb(db, deviceName);
-      return { ok: true };
+      const name = String(deviceName || "").trim();
+      if (!name) {
+        return { ok: false, error: "Select a printer from the list." };
+      }
+      const printers = await getPrintersFromAnyWindow();
+      if (!printers.some((p) => p.name === name)) {
+        return { ok: false, error: "That printer is not available on this PC." };
+      }
+      writeSilentPrinterNameToDb(db, name);
+      return { ok: true, deviceName: name };
     } catch (e) {
       return { ok: false, error: String(e && e.message ? e.message : e) };
     }

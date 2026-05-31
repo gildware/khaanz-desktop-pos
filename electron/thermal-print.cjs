@@ -94,4 +94,31 @@ function wrapThermalPrintDocument(bodyHtml, title) {
 </html>`;
 }
 
-module.exports = { THERMAL_PRINT_STYLE, wrapThermalPrintDocument };
+/** Sample receipt for Connect printer → Test print. */
+function buildTestPrintPlainText() {
+  const w = 42;
+  const line = "-".repeat(w);
+  const center = (s) => {
+    const t = String(s).trim();
+    if (t.length >= w) return t.slice(0, w);
+    const pad = Math.floor((w - t.length) / 2);
+    return `${" ".repeat(pad)}${t}`;
+  };
+  return [
+    center("Khaanz POS"),
+    center("TEST PRINT"),
+    line,
+    "If you can read this,",
+    "your printer is connected.",
+    new Date().toLocaleString("en-IN"),
+    line,
+    center("Thank you"),
+    "",
+  ].join("\n");
+}
+
+module.exports = {
+  THERMAL_PRINT_STYLE,
+  wrapThermalPrintDocument,
+  buildTestPrintPlainText,
+};

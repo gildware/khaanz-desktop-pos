@@ -41,6 +41,8 @@ contextBridge.exposeInMainWorld("khaanzDesktop", {
   },
   printSilentHtml: (html, title) =>
     invoke("khaanz:print-silent-html", { html, title }),
+  getPrinterStatus: () => invoke("khaanz:get-printer-status"),
+  testPrint: () => invoke("khaanz:test-print"),
   listPrinters: () => invoke("khaanz:list-printers"),
   getSilentPrinter: () => invoke("khaanz:get-silent-printer"),
   setSilentPrinter: (deviceName) => invoke("khaanz:set-silent-printer", deviceName),

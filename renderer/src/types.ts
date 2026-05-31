@@ -260,6 +260,19 @@ export type KhaanzDesktopApi = {
     | { ok: false; error: string }
   >;
   printSilentHtml: (html: string, title?: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+  getPrinterStatus: () => Promise<{
+    ok: true;
+    saved: boolean;
+    available: boolean;
+    online: boolean;
+    verified: boolean;
+    connected: boolean;
+    deviceName: string;
+    statusDetail?: string;
+    printers: Array<{ name: string; isDefault?: boolean; status?: string }>;
+    error?: string;
+  }>;
+  testPrint: () => Promise<{ ok: true } | { ok: false; error: string }>;
   listRecentPosOrders: () => Promise<
     { ok: true; orders: RecentOrderRow[] } | { ok: false; error: string }
   >;

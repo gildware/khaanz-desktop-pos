@@ -152,9 +152,11 @@ Packaged apps check GitHub for updates on startup (and via `khaanzDesktop.checkF
 
 On Windows the app uses a **plain-text receipt layout** (Courier, no tables) and driver-friendly print settings — custom paper size/DPI often causes blank or black prints on ESC/POS queue drivers.
 
-1. In **Settings → Printers**, confirm **BillQuick Lite** (or your exact queue name) appears.
-2. In Khaanz POS, click **Connect printer** and select **BillQuick Lite** → **Save printer**.
-3. Print a test **Bill** or **KOT** from the cart.
+1. In Windows **Printers & scanners**, confirm **BillQuick Lite** is installed and online.
+2. In Khaanz POS, click **Connect printer** → select **BillQuick Lite** → **Save printer** → **Test print**.
+3. When the header shows **Printer connected**, use **Save & Bill** / **Save & Print** on orders.
+
+On Windows, receipts are sent as **plain text** via PowerShell `Out-Printer` (reliable for BillQuick Lite / Generic Text drivers). macOS uses HTML silent print.
 
 If the queue name differs, set `KHAANZ_SILENT_PRINTER` to the exact name from the list-printers command below.
 

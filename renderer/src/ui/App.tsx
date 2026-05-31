@@ -154,8 +154,8 @@ export function App() {
   const [ordersRefreshKey, setOrdersRefreshKey] = useState(0);
   const [posSettings, setPosSettings] = useState<PosSettings | null>(null);
   const [paymentMethodKey, setPaymentMethodKey] = useState("");
-  type PlacingAction = "none" | "kot" | "bill" | "both";
-  const [placingAction, setPlacingAction] = useState<PlacingAction | null>(null);
+  type SubmitMode = "save" | "kot" | "bill" | "both";
+  const [submittingMode, setSubmittingMode] = useState<SubmitMode | null>(null);
   const [lastBill, setLastBill] = useState<{ orderRef: string } | null>(null);
   const [printerDialogOpen, setPrinterDialogOpen] = useState(false);
   const [printerConnected, setPrinterConnected] = useState(false);
@@ -211,20 +211,13 @@ export function App() {
   }, [api]);
 
   const refreshPrinterStatus = useCallback(async () => {
-    if (!desktop?.listPrinters || !desktop.getSilentPrinter) {
+    if (!desktop?.getPrinterStatus) {
       setPrinterConnected(false);
       return;
     }
     try {
-      const [list, current] = await Promise.all([
-        desktop.listPrinters(),
-        desktop.getSilentPrinter(),
-      ]);
-      const chosen = (current?.deviceName || "").trim();
-      const connected =
-        (chosen && (list ?? []).some((p) => p.name === chosen)) ||
-        (!chosen && (list ?? []).some((p) => p.isDefault));
-      setPrinterConnected(Boolean(connected));
+      const status = await desktop.getPrinterStatus();
+      setPrinterConnected(Boolean(status.ok && status.connected));
     } catch {
       setPrinterConnected(false);
     }
@@ -690,7 +683,9 @@ export function App() {
         discountMinor: totals.discountCents,
       };
 
-      setPlacingAction(printMode);
+      const submitMode: SubmitMode =
+        printMode === "none" ? "save" : printMode === "both" ? "both" : printMode;
+      setSubmittingMode(submitMode);
       setError("");
       setNotice("");
       try {
@@ -701,7 +696,6 @@ export function App() {
         }
         const orderRef = placed.orderRef;
         setLastBill({ orderRef });
-        setNotice(`Order ${orderRef} saved`);
         setCart([]);
         setNotes("");
         setAddress("");
@@ -711,46 +705,59 @@ export function App() {
         setOrdersRefreshKey((k) => k + 1);
         void refreshSyncStatus();
 
-        if (printMode === "kot" || printMode === "both") {
-          await printPosKotThermal(
-            {
-              restaurantName,
-              billHeader: header,
-              orderRef,
-              fulfillmentLabel: fulfillLabel,
-              notes: notesSnap,
-              lines: snapshotKot,
-            },
-            desktop,
-          );
+        if (printMode === "none") {
+          setNotice(`Order ${orderRef} saved`);
+          return;
         }
-        if (printMode === "bill" || printMode === "both") {
-          await printPosBillThermal(
-            {
-              restaurantName,
-              billHeader: header,
-              billFooter: footer,
-              orderRef,
-              proforma: false,
-              fulfillmentLabel: fulfillLabel,
-              customerName: nameSnap,
-              phoneDigits: phonePrint,
-              notes: notesSnap,
-              footerNote: footerNote || undefined,
-              paymentLabel: paymentDisplayName(payKey),
-              lines: snapshotLines,
-              total: snapTotal,
-              itemsSubtotal: itemsSubtotalPrint,
-              deliveryCharge: deliveryPrint > 0 ? deliveryPrint : undefined,
-              discount: discountPrint > 0 ? discountPrint : undefined,
-            },
-            desktop,
-          );
+
+        setNotice(`Order ${orderRef} saved — printing…`);
+        try {
+          if (printMode === "kot" || printMode === "both") {
+            await printPosKotThermal(
+              {
+                restaurantName,
+                billHeader: header,
+                orderRef,
+                fulfillmentLabel: fulfillLabel,
+                notes: notesSnap,
+                lines: snapshotKot,
+              },
+              desktop,
+            );
+          }
+          if (printMode === "bill" || printMode === "both") {
+            await printPosBillThermal(
+              {
+                restaurantName,
+                billHeader: header,
+                billFooter: footer,
+                orderRef,
+                proforma: false,
+                fulfillmentLabel: fulfillLabel,
+                customerName: nameSnap,
+                phoneDigits: phonePrint,
+                notes: notesSnap,
+                footerNote: footerNote || undefined,
+                paymentLabel: paymentDisplayName(payKey),
+                lines: snapshotLines,
+                total: snapTotal,
+                itemsSubtotal: itemsSubtotalPrint,
+                deliveryCharge: deliveryPrint > 0 ? deliveryPrint : undefined,
+                discount: discountPrint > 0 ? discountPrint : undefined,
+              },
+              desktop,
+            );
+          }
+          setNotice(`Order ${orderRef} saved and sent to printer`);
+        } catch (printErr) {
+          const msg = printErr instanceof Error ? printErr.message : String(printErr);
+          setError(`Order ${orderRef} saved, but print failed: ${msg}`);
+          void refreshPrinterStatus();
         }
       } catch (e) {
         setError(String(e instanceof Error ? e.message : e));
       } finally {
-        setPlacingAction(null);
+        setSubmittingMode(null);
       }
     },
     [
@@ -773,7 +780,7 @@ export function App() {
     ],
   );
 
-  const isPlacing = placingAction !== null;
+  const isSubmitting = submittingMode !== null;
 
   if (!session) {
     const needsServer = !boot?.syncConfigured || showServerSetup;
@@ -955,7 +962,7 @@ export function App() {
             }`}
           >
             <PrinterIcon className="size-4" />
-            {printerConnected ? "Printer connected" : "Connect printer"}
+            {printerConnected ? "Printer ready" : "Connect printer"}
           </button>
           <button
             type="button"
@@ -1194,7 +1201,7 @@ export function App() {
           </div>
         </section>
 
-        <aside className="flex min-h-0 w-full shrink-0 flex-col overflow-hidden border-l bg-muted/20 lg:w-[440px]">
+        <aside className="flex min-h-0 min-w-0 w-full shrink-0 flex-col overflow-hidden border-l bg-muted/20 lg:w-[440px]">
           <div className="shrink-0 border-b p-3">
             <p className="mb-2 font-medium text-sm">Order type</p>
             <div className="flex flex-wrap gap-2">
@@ -1463,14 +1470,14 @@ export function App() {
                   </div>
                 )}
               </div>
-              <div className="flex flex-col gap-2">
+              <div className="flex min-w-0 flex-col gap-2">
                 <button
                   type="button"
-                  disabled={isPlacing || cart.length === 0}
+                  disabled={isSubmitting || cart.length === 0}
                   onClick={() => void submitPosOrder("none")}
                   className="flex h-11 w-full items-center justify-center rounded-lg bg-primary font-medium text-primary-foreground text-sm disabled:opacity-50"
                 >
-                  {placingAction === "none" ? (
+                  {submittingMode === "save" ? (
                     <Loader2Icon className="size-4 animate-spin" />
                   ) : (
                     "Save"
@@ -1485,14 +1492,14 @@ export function App() {
                     Connect printer to enable printing.
                   </button>
                 ) : null}
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-3">
                   <button
                     type="button"
-                    disabled={isPlacing || cart.length === 0 || !printerConnected}
+                    disabled={isSubmitting || cart.length === 0 || !printerConnected}
                     onClick={() => void submitPosOrder("kot")}
-                    className="flex h-10 items-center justify-center rounded-md border text-sm disabled:opacity-50"
+                    className="flex h-10 min-w-0 items-center justify-center rounded-md border px-2 text-sm disabled:opacity-50"
                   >
-                    {placingAction === "kot" ? (
+                    {submittingMode === "kot" ? (
                       <Loader2Icon className="size-4 animate-spin" />
                     ) : (
                       "Save & KOT"
@@ -1500,11 +1507,11 @@ export function App() {
                   </button>
                   <button
                     type="button"
-                    disabled={isPlacing || cart.length === 0 || !printerConnected}
+                    disabled={isSubmitting || cart.length === 0 || !printerConnected}
                     onClick={() => void submitPosOrder("bill")}
-                    className="flex h-10 items-center justify-center rounded-md border text-sm disabled:opacity-50"
+                    className="flex h-10 min-w-0 items-center justify-center rounded-md border px-2 text-sm disabled:opacity-50"
                   >
-                    {placingAction === "bill" ? (
+                    {submittingMode === "bill" ? (
                       <Loader2Icon className="size-4 animate-spin" />
                     ) : (
                       "Save & Bill"
@@ -1512,11 +1519,11 @@ export function App() {
                   </button>
                   <button
                     type="button"
-                    disabled={isPlacing || cart.length === 0 || !printerConnected}
+                    disabled={isSubmitting || cart.length === 0 || !printerConnected}
                     onClick={() => void submitPosOrder("both")}
-                    className="flex h-10 items-center justify-center rounded-md border text-sm disabled:opacity-50"
+                    className="flex h-10 min-w-0 items-center justify-center rounded-md border px-2 text-sm disabled:opacity-50"
                   >
-                    {placingAction === "both" ? (
+                    {submittingMode === "both" ? (
                       <Loader2Icon className="size-4 animate-spin" />
                     ) : (
                       "Save & Print"
@@ -1526,9 +1533,9 @@ export function App() {
               </div>
 
               {notice ? (
-                <p className="text-sm text-green-700 dark:text-green-400">{notice}</p>
+                <p className="break-words text-sm text-green-700 dark:text-green-400">{notice}</p>
               ) : null}
-              {error ? <p className="text-destructive text-sm">{error}</p> : null}
+              {error ? <p className="break-words text-destructive text-sm">{error}</p> : null}
             </div>
           </footer>
         </aside>
