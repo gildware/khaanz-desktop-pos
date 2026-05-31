@@ -1,41 +1,22 @@
-const { execFile } = require("child_process");
 const fs = require("fs");
 const path = require("path");
-const { app } = require("electron");
-const { buildEscPosBuffer, buildPlainTextBuffer } = require("./escpos-buffer.cjs");
-const { printReceiptGdiWindows } = require("./print-gdi-windows.cjs");
-const { printReceiptPdfWindows } = require("./print-pdf-windows.cjs");
-
-function psQuote(s) {
-  return `'${String(s).replace(/'/g, "''")}'`;
-}
-
-function runPowerShellScript(script, timeoutMs = 60_000) {
-  const dir = path.join(app.getPath("temp"), "khaanz-print");
-  fs.mkdirSync(dir, { recursive: true });
-  const scriptPath = path.join(dir, `ps-${Date.now()}-${Math.random().toString(36).slice(2)}.ps1`);
-  fs.writeFileSync(scriptPath, script, "utf8");
-
-  return new Promise((resolve) => {
-    execFile(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
-      { timeout: timeoutMs, windowsHide: true, maxBuffer: 2 * 1024 * 1024 },
-      (err, stdout, stderr) => {
-        try {
-          fs.unlinkSync(scriptPath);
-        } catch {
-          /* ignore */
-        }
-        resolve({
-          err,
-          stdout: String(stdout || "").trim(),
-          stderr: String(stderr || "").trim(),
-        });
-      },
-    );
-  });
-}
+const { buildEscPosBuffer, buildPlainTextBuffer, toAsciiSafe } = require("./escpos-buffer.cjs");
+const { runPowerShellScript, psQuote } = require("./print-ps.cjs");
+const { getPrintTempDir } = require("./print-temp.cjs");
+const { printViaNotepadPtWindows, powershellSucceeded } = require("./print-notepad.cjs");
+const { printViaShellPrinttoWindows } = require("./print-shell-printto.cjs");
+const { printGdiDotNetWindows } = require("./print-gdi-dotnet.cjs");
+const { printEscPosToPortWindows } = require("./print-port-raw.cjs");
+const {
+  resolveWindowsPrinterName,
+  getWindowsPrinterDiagnostics,
+} = require("./print-diagnostics-windows.cjs");
+const { verifyWindowsSpoolerActivity } = require("./print-spooler-windows.cjs");
+const {
+  reorderAttempts,
+  isLikelyGdiReceiptDriver,
+  isVirtualPort,
+} = require("./print-strategy-windows.cjs");
 
 const RAW_PRINTER_HELPER_CS = `
 using System;
@@ -99,35 +80,6 @@ public class KhaanzRawPrinter {
   }
 }
 `;
-
-async function resolveWindowsPrinterName(printerName) {
-  const wanted = String(printerName || "").trim();
-  if (!wanted) {
-    return { ok: false, detail: "No printer selected" };
-  }
-
-  const script = [
-    "$ErrorActionPreference = 'Stop'",
-    `$wanted = ${psQuote(wanted)}`,
-    "$exact = Get-Printer -Name $wanted -ErrorAction SilentlyContinue",
-    "if ($exact) { Write-Output $exact.Name; exit 0 }",
-    "$match = @(Get-Printer | Where-Object { $_.Name -ieq $wanted }) | Select-Object -First 1",
-    "if ($match) { Write-Output $match.Name; exit 0 }",
-    "Write-Output 'missing'",
-    "exit 2",
-  ].join("\n");
-
-  const r = await runPowerShellScript(script, 15_000);
-  const out = r.stdout.trim();
-  if (!r.err && out && out !== "missing") {
-    return { ok: true, name: out };
-  }
-  return {
-    ok: false,
-    detail:
-      "Printer queue not found in Windows. Open Connect printer, click Refresh, and select your receipt printer.",
-  };
-}
 
 async function checkWindowsPrinterOnline(printerName) {
   const resolved = await resolveWindowsPrinterName(printerName);
@@ -193,7 +145,7 @@ function friendlyWindowsPrintError(raw) {
 
 /** WinSpool RAW with TEXT datatype (plain ASCII, no ESC) — some vendor drivers. */
 async function printTextRawWindows(resolvedName, text) {
-  const dir = path.join(app.getPath("temp"), "khaanz-print");
+  const dir = getPrintTempDir();
   fs.mkdirSync(dir, { recursive: true });
   const binPath = path.join(dir, `text-${Date.now()}.bin`);
   fs.writeFileSync(binPath, buildPlainTextBuffer(text));
@@ -227,7 +179,7 @@ async function printTextRawWindows(resolvedName, text) {
     /* ignore */
   }
 
-  if (!r.err && r.stdout.toLowerCase() === "ok") {
+  if (powershellSucceeded(r)) {
     return { ok: true, method: "text-raw" };
   }
   return {
@@ -238,7 +190,7 @@ async function printTextRawWindows(resolvedName, text) {
 
 /** ESC/POS RAW bytes via WinSpool (Generic/Text Only queues). */
 async function printEscPosRawWindows(resolvedName, text) {
-  const dir = path.join(app.getPath("temp"), "khaanz-print");
+  const dir = getPrintTempDir();
   fs.mkdirSync(dir, { recursive: true });
   const binPath = path.join(dir, `receipt-${Date.now()}.bin`);
   const bytes = buildEscPosBuffer(text);
@@ -268,7 +220,7 @@ async function printEscPosRawWindows(resolvedName, text) {
     /* ignore */
   }
 
-  if (!r.err && r.stdout.toLowerCase() === "ok") {
+  if (powershellSucceeded(r)) {
     return { ok: true, method: "escpos-raw" };
   }
   return {
@@ -279,10 +231,9 @@ async function printEscPosRawWindows(resolvedName, text) {
 
 /** Fallback: plain text via Out-Printer. */
 async function printPlainTextOutPrinter(resolvedName, text) {
-  const dir = path.join(app.getPath("temp"), "khaanz-print");
+  const dir = getPrintTempDir();
   fs.mkdirSync(dir, { recursive: true });
   const filePath = path.join(dir, `receipt-${Date.now()}.txt`);
-  const { toAsciiSafe } = require("./escpos-buffer.cjs");
   fs.writeFileSync(filePath, `${toAsciiSafe(text)}\n`, "ascii");
 
   const script = [
@@ -301,7 +252,7 @@ async function printPlainTextOutPrinter(resolvedName, text) {
     /* ignore */
   }
 
-  if (!r.err && r.stdout.toLowerCase() === "ok") {
+  if (powershellSucceeded(r)) {
     return { ok: true, method: "out-printer" };
   }
   return {
@@ -312,10 +263,9 @@ async function printPlainTextOutPrinter(resolvedName, text) {
 
 /** Classic Windows `print` command — used by many legacy POS apps. */
 async function printViaCmdPrint(resolvedName, text) {
-  const dir = path.join(app.getPath("temp"), "khaanz-print");
+  const dir = getPrintTempDir();
   fs.mkdirSync(dir, { recursive: true });
   const filePath = path.join(dir, `receipt-${Date.now()}.txt`);
-  const { toAsciiSafe } = require("./escpos-buffer.cjs");
   fs.writeFileSync(filePath, `${toAsciiSafe(text)}\n`, "ascii");
 
   const script = [
@@ -340,7 +290,7 @@ async function printViaCmdPrint(resolvedName, text) {
     /* ignore */
   }
 
-  if (!r.err && r.stdout.toLowerCase() === "ok") {
+  if (powershellSucceeded(r)) {
     return { ok: true, method: "cmd-print" };
   }
   return {
@@ -349,11 +299,61 @@ async function printViaCmdPrint(resolvedName, text) {
   };
 }
 
+function buildWindowsPrintAttempts(name, body, title, options = {}) {
+  const safeTitle = title || "Receipt";
+  const useElectronPrint = Boolean(process.versions.electron) && !options.skipElectronPrint;
+  const gdiReceipt = options.gdiReceipt !== false;
+
+  const attempts = [
+    { methodId: "notepad-pt", run: () => printViaNotepadPtWindows(name, body) },
+    { methodId: "shell-printto", run: () => printViaShellPrinttoWindows(name, body) },
+    { methodId: "dotnet-gdi", run: () => printGdiDotNetWindows(name, body) },
+    { methodId: "cmd-print", run: () => printViaCmdPrint(name, body) },
+  ];
+
+  if (useElectronPrint) {
+    attempts.push(
+      {
+        methodId: "gdi",
+        run: () => require("./print-gdi-windows.cjs").printReceiptGdiWindows(name, body, safeTitle),
+      },
+      {
+        methodId: "pdf",
+        run: () => require("./print-pdf-windows.cjs").printReceiptPdfWindows(name, body, safeTitle),
+      },
+    );
+  }
+
+  if (!gdiReceipt) {
+    attempts.push(
+      { methodId: "port-raw", run: () => printEscPosToPortWindows(name, body) },
+      { methodId: "text-raw", run: () => printTextRawWindows(name, body) },
+      { methodId: "escpos-raw", run: () => printEscPosRawWindows(name, body) },
+      { methodId: "out-printer", run: () => printPlainTextOutPrinter(name, body) },
+    );
+  }
+
+  return reorderAttempts(attempts, options.preferredMethod);
+}
+
+async function confirmPrintSucceeded(printerName, methodId, attemptResult) {
+  if (methodId === "notepad-pt" && attemptResult.ok) {
+    return { ok: true, proof: "notepad-exit" };
+  }
+  const spooler = await verifyWindowsSpoolerActivity(printerName, 8);
+  if (spooler.ok) {
+    return { ok: true, proof: spooler.detail || "spooler" };
+  }
+  return {
+    ok: false,
+    error: `Spooler saw no job (${methodId}). ${spooler.error || ""}`.trim(),
+  };
+}
+
 /**
- * Print on Windows — same strategy order as Petpooja-style POS apps:
- * 1) GDI (Chromium)  2) cmd print  3) TEXT raw  4) ESC/POS raw  5) Out-Printer
+ * Print on Windows — GDI methods for BillQuick/Petpooja drivers; spooler-checked success.
  */
-async function printPlainTextWindows(deviceName, text, title) {
+async function printPlainTextWindows(deviceName, text, title, options = {}) {
   const wanted = String(deviceName || "").trim();
   if (!wanted) {
     return { ok: false, error: "No printer selected." };
@@ -369,35 +369,58 @@ async function printPlainTextWindows(deviceName, text, title) {
   }
 
   const name = resolved.name;
-  const attempts = [
-    () => printReceiptPdfWindows(name, body, title || "Receipt"),
-    () => printReceiptGdiWindows(name, body, title || "Receipt"),
-    () => printViaCmdPrint(name, body),
-    () => printTextRawWindows(name, body),
-    () => printEscPosRawWindows(name, body),
-    () => printPlainTextOutPrinter(name, body),
-  ];
+  const diag = await getWindowsPrinterDiagnostics(wanted);
+  if (diag.ok && isVirtualPort(diag.port, diag.driver)) {
+    return {
+      ok: false,
+      error:
+        "That queue is a PDF/virtual printer, not your thermal receipt printer. Pick the same name as Petpooja (e.g. BillQuick Lite).",
+    };
+  }
+
+  const gdiReceipt = diag.ok
+    ? isLikelyGdiReceiptDriver(diag.driver, diag.port)
+    : true;
+
+  const attempts = buildWindowsPrintAttempts(name, body, title, {
+    ...options,
+    gdiReceipt,
+  });
 
   const errors = [];
   for (const attempt of attempts) {
-    const r = await attempt();
-    if (r.ok) {
-      return { ok: true, deviceName: name, method: r.method || "unknown" };
+    const r = await attempt.run();
+    if (!r.ok) {
+      if (r.error) errors.push(`${attempt.methodId}: ${r.error}`);
+      continue;
     }
-    if (r.error) errors.push(r.error);
+
+    const confirmed = await confirmPrintSucceeded(name, attempt.methodId, r);
+    if (confirmed.ok) {
+      return {
+        ok: true,
+        deviceName: name,
+        method: r.method || attempt.methodId,
+        proof: confirmed.proof,
+      };
+    }
+    errors.push(`${attempt.methodId}: ${confirmed.error || "not confirmed"}`);
   }
 
+  const detail = errors.filter(Boolean).join(" | ");
   return {
     ok: false,
-    error:
-      errors.filter(Boolean).join(" · ") ||
-      "All print methods failed. Use the same printer name as Petpooja, Save, then Test print.",
+    error: detail
+      ? `Print failed (${errors.length} tries): ${detail}`
+      : "Print failed. Use the exact printer name from Petpooja, then Save and Test print.",
   };
 }
 
 module.exports = {
   resolveWindowsPrinterName,
   checkWindowsPrinterOnline,
+  getWindowsPrinterDiagnostics,
   printPlainTextWindows,
+  buildWindowsPrintAttempts,
   friendlyWindowsPrintError,
 };

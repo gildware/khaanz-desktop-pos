@@ -148,17 +148,61 @@ Packaged apps check GitHub for updates on startup (and via `khaanzDesktop.checkF
 | `KHAANZ_SYNC_KEY` | Shared secret header for sync when required by your API. |
 | `KHAANZ_SILENT_PRINTER` | Optional exact OS printer name for silent receipts. |
 
+### Developing on Mac
+
+You can build and run almost everything on macOS (`npm run dev`). **BillQuick / Petpooja-style thermal printing only exists on Windows** — the Mac app uses a different HTML print path and cannot exercise `notepad /pt` or the Windows spooler.
+
+| What | On Mac | On Windows PC at the shop |
+|------|--------|---------------------------|
+| UI, cart, orders, sync, PIN | Yes | Yes |
+| Thermal receipt (BillQuick Lite) | No (different code path) | Yes — this is the real test |
+| Full print validation | Use mock (below) or any Mac printer | Test print + standalone script |
+
+**Mac: test the rest of the app without a receipt printer**
+
+```bash
+# pos-desktop/.env
+KHAANZ_DEV_MOCK_PRINT=1
+npm run dev
+```
+
+Connect printer → pick any queue → Save → Test print will succeed as **dev-mock** (no paper). Use that for Save & Bill flow while you work on UI/sync.
+
+**Before each Windows release** (once, on the shop PC — not on your Mac):
+
+```powershell
+node scripts/test-windows-print.cjs "BillQuick Lite"
+```
+
+If that prints paper, ship the release. GitHub Actions builds the `.exe` on Windows in CI, but it cannot attach to your USB printer — a human check on the shop machine is still required.
+
+Options if you want Windows without sitting at the shop every time: a cheap Windows mini PC on the network (Remote Desktop), Parallels/VM on Mac (USB passthrough is fiddly), or ask staff to run the one-line test after install.
+
 ### Windows thermal printers (BillQuick Lite, POS 203DPI, etc.)
 
-On Windows the app uses a **plain-text receipt layout** (Courier, no tables) and driver-friendly print settings — custom paper size/DPI often causes blank or black prints on ESC/POS queue drivers.
+The app uses the **same GDI print path as Petpooja** (`notepad /pt` and related Windows APIs), not RAW ESC/POS. It only reports success when **Notepad exits OK** or the **Windows print spooler** shows a job on that queue. After the first successful test print, it **reuses that method** for bills and KOTs.
 
-1. In Windows **Printers & scanners**, confirm **BillQuick Lite** is installed and online.
-2. In Khaanz POS, click **Connect printer** → select **BillQuick Lite** → **Save printer** → **Test print**.
-3. When the header shows **Printer connected**, use **Save & Bill** / **Save & Print** on orders.
+**Test printing before you build/install a release** (on the Windows PC with the printer USB-connected):
 
-On Windows, printing tries the same approaches as Petpooja-style POS apps: **GDI driver print** first (BillQuick Lite / POS 203DPI), then legacy `print` command, then raw text. Pick the **same printer queue name** as in Petpooja. macOS uses HTML silent print.
+```powershell
+cd pos-desktop
+npm install
+# Fastest — pure PowerShell (no Electron):
+.\scripts\Test-KhaanzPrinter.ps1 -PrinterName "BillQuick Lite"
 
-If the queue name differs, set `KHAANZ_SILENT_PRINTER` to the exact name from the list-printers command below.
+# Full app logic — same code as Test print in the POS:
+node scripts/test-windows-print.cjs "BillQuick Lite"
+```
+
+If paper prints from either command, the installed app will work the same way. If both fail, fix the queue in Windows (same name as Petpooja) before deploying again.
+
+**In the POS app:**
+
+1. **Connect printer** → select **BillQuick Lite** (not HP / PDF / Microsoft Print to PDF).
+2. **Save** → **Test print** → paper must print; header shows **Printer ready**.
+3. Use **Save & Bill** / **Save & Print**.
+
+macOS uses HTML silent print. Optional: `KHAANZ_SILENT_PRINTER` = exact queue name.
 
 ### List printer names (macOS / Windows)
 

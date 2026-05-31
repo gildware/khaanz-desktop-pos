@@ -274,7 +274,7 @@ export type KhaanzDesktopApi = {
     printers: Array<{ name: string; isDefault?: boolean; status?: string }>;
     error?: string;
   }>;
-  testPrint: () => Promise<{ ok: true } | { ok: false; error: string }>;
+  testPrint: () => Promise<{ ok: true; method?: string } | { ok: false; error: string }>;
   listRecentPosOrders: () => Promise<
     { ok: true; orders: RecentOrderRow[] } | { ok: false; error: string }
   >;

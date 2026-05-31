@@ -15,7 +15,8 @@
     "dist": "electron-builder --publish never",
     "dist:publish": "electron-builder --publish always",
     "start": "electron .",
-    "start:dist": "KHAANZ_LOAD_DIST=1 electron ."
+    "start:dist": "KHAANZ_LOAD_DIST=1 electron .",
+    "test:print:win": "node scripts/test-windows-print.cjs"
   },
   "devDependencies": {
     "@electron/rebuild": "^3.7.1",

@@ -4,6 +4,14 @@ import { Loader2Icon, XIcon } from "lucide-react";
 
 type PrinterRow = { name: string; isDefault?: boolean };
 
+type PrinterDiagnostics = {
+  port?: string;
+  driver?: string;
+  status?: string;
+  workOffline?: boolean;
+  resolvedName?: string;
+};
+
 type PrinterStatus = {
   ok: true;
   saved: boolean;
@@ -14,6 +22,7 @@ type PrinterStatus = {
   ready?: boolean;
   deviceName: string;
   statusDetail?: string;
+  diagnostics?: PrinterDiagnostics | null;
   printers: PrinterRow[];
 };
 
@@ -96,7 +105,11 @@ export function PrinterDialog({ open, onClose, onSaved }: Props) {
         await refresh();
         return;
       }
-      setTestMessage("Test print sent. Check your receipt printer now.");
+      setTestMessage(
+        out.method
+          ? `Printed via ${out.method} (confirmed). Check receipt paper now.`
+          : "Test print sent. Check your receipt printer now.",
+      );
       await refresh();
       onSaved();
     } finally {
@@ -124,6 +137,12 @@ export function PrinterDialog({ open, onClose, onSaved }: Props) {
   const receiptHint =
     selected && !isLikelyReceiptPrinter(selected)
       ? "Warning: this looks like an office/PDF printer. Use BillQuick Lite or your 80mm thermal queue."
+      : null;
+
+  const diag = status?.diagnostics;
+  const diagLine =
+    diag?.port || diag?.driver
+      ? `Windows: ${diag.resolvedName || status?.deviceName || selected} · port ${diag.port || "?"} · ${diag.driver || "driver?"}`
       : null;
 
   return createPortal(
@@ -194,6 +213,9 @@ export function PrinterDialog({ open, onClose, onSaved }: Props) {
                   <p className="text-amber-800 text-xs leading-normal dark:text-amber-300">
                     {receiptHint}
                   </p>
+                ) : null}
+                {diagLine ? (
+                  <p className="text-muted-foreground text-xs leading-normal">{diagLine}</p>
                 ) : null}
               </div>
             )}

@@ -16,6 +16,7 @@ const {
 const {
   resolveWindowsPrinterName,
   checkWindowsPrinterOnline,
+  getWindowsPrinterDiagnostics,
   printPlainTextWindows,
 } = require("./windows-printer.cjs");
 const path = require("path");
@@ -641,6 +642,26 @@ function writeSilentPrinterNameToDb(db, deviceName) {
   const name = String(deviceName || "").trim();
   db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('silent_printer',?)").run(name);
   clearPrinterVerified(db);
+  try {
+    db.prepare("DELETE FROM meta WHERE key='print_method_win'").run();
+  } catch {
+    /* ignore */
+  }
+}
+
+function readPreferredPrintMethodFromDb(db) {
+  try {
+    const row = db.prepare("SELECT value FROM meta WHERE key='print_method_win'").get();
+    return row && typeof row.value === "string" ? row.value.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+function writePreferredPrintMethodToDb(db, method) {
+  const m = String(method || "").trim();
+  if (!m) return;
+  db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('print_method_win',?)").run(m);
 }
 
 function readPrinterVerifiedName(db) {
@@ -743,8 +764,28 @@ async function getPrinterConnectionStatus() {
     deviceName = onlineCheck.name;
   }
   const verifiedName = readPrinterVerifiedName(db);
-  const verified = Boolean(saved && verifiedName === saved);
+  const verified = Boolean(
+    saved &&
+      verifiedName &&
+      (verifiedName === saved ||
+        verifiedName === deviceName ||
+        verifiedName.toLowerCase() === saved.toLowerCase() ||
+        verifiedName.toLowerCase() === deviceName.toLowerCase()),
+  );
   const online = inList && onlineCheck.online;
+  let diagnostics = null;
+  if (process.platform === "win32" && saved) {
+    const d = await getWindowsPrinterDiagnostics(saved);
+    if (d.ok) {
+      diagnostics = {
+        port: d.port,
+        driver: d.driver,
+        status: d.status,
+        workOffline: d.workOffline,
+        resolvedName: d.resolvedName,
+      };
+    }
+  }
   let statusDetail = onlineCheck.detail || "";
   if (!statusDetail && saved && !inList) {
     statusDetail =
@@ -757,7 +798,7 @@ async function getPrinterConnectionStatus() {
     available: inList,
     online,
     verified,
-    connected: Boolean(saved && (verified || online)),
+    connected: Boolean(saved && verified && online),
     ready: Boolean(saved),
     deviceName,
     statusDetail,
@@ -766,6 +807,7 @@ async function getPrinterConnectionStatus() {
       isDefault: Boolean(p.isDefault),
       status: p.status != null ? String(p.status) : undefined,
     })),
+    diagnostics,
   };
 }
 
@@ -813,7 +855,14 @@ async function printPlainTextViaHtmlWindow(plainText, title) {
   return printSilentHtml({ html: doc, title: title || "Receipt" });
 }
 
-/** Direct receipt print — Windows uses ESC/POS RAW (no HTML window). */
+/** Mac/Linux dev: skip real print when KHAANZ_DEV_MOCK_PRINT=1 (Windows always prints for real). */
+function isDevMockPrintEnabled() {
+  return (
+    process.env.KHAANZ_DEV_MOCK_PRINT === "1" && process.platform !== "win32"
+  );
+}
+
+/** Direct receipt print — Windows uses GDI/plain text; macOS uses HTML silent print. */
 async function printReceiptText({ text, title }) {
   const body = String(text || "").trim();
   if (!body) {
@@ -821,6 +870,15 @@ async function printReceiptText({ text, title }) {
   }
 
   const saved = resolveSavedPrinterName();
+  if (isDevMockPrintEnabled()) {
+    return {
+      ok: true,
+      method: "dev-mock",
+      deviceName: saved || "dev-mock",
+      proof: "mac-dev-mock",
+    };
+  }
+
   if (!saved) {
     return {
       ok: false,
@@ -829,8 +887,12 @@ async function printReceiptText({ text, title }) {
   }
 
   if (process.platform === "win32") {
-    const r = await printPlainTextWindows(saved, body, title || "Receipt");
+    const preferred = readPreferredPrintMethodFromDb(db);
+    const r = await printPlainTextWindows(saved, body, title || "Receipt", {
+      preferredMethod: preferred,
+    });
     if (r.ok) {
+      if (r.method) writePreferredPrintMethodToDb(db, r.method);
       const verifiedName = r.deviceName || saved;
       if (r.deviceName && r.deviceName !== saved) {
         db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('silent_printer',?)").run(
@@ -1563,7 +1625,7 @@ function registerIpc() {
     const r = await printReceiptText({ text: sample, title: "Test print" });
     if (r.ok) {
       const verifiedName =
-        process.platform === "win32" && r.deviceName ? r.deviceName : printName;
+        process.platform === "win32" && r.deviceName ? r.deviceName : saved;
       setPrinterVerified(db, verifiedName);
       if (process.platform === "win32" && r.deviceName && r.deviceName !== saved) {
         writeSilentPrinterNameToDb(db, r.deviceName);
