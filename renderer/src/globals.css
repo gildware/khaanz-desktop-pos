@@ -135,5 +135,24 @@
     font-synthesis: none;
     text-rendering: optimizeLegibility;
   }
+
+  button,
+  [role="button"] {
+    @apply cursor-pointer select-none transition-[transform,background-color,border-color,color,box-shadow,opacity] duration-150 ease-out;
+  }
+
+  button:disabled,
+  [role="button"][aria-disabled="true"] {
+    @apply cursor-not-allowed;
+  }
+
+  button:not(:disabled):active,
+  [role="button"]:not([aria-disabled="true"]):active {
+    transform: scale(0.97);
+  }
+
+  summary {
+    @apply cursor-pointer select-none;
+  }
 }
 

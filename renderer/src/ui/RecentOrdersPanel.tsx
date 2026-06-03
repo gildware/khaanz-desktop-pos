@@ -27,6 +27,8 @@ const ORDER_STATUS_TABS = [
 
 type StatusFilter = (typeof ORDER_STATUS_TABS)[number]["id"];
 
+const PRINT_COOLDOWN_MS = 5000;
+
 type Props = {
   sessionId: string;
   refreshKey?: number;
@@ -52,6 +54,28 @@ export function RecentOrdersPanel({
   const [statusConfirm, setStatusConfirm] = useState<OrderStatusConfirmPayload | null>(
     null,
   );
+  /** orderId → cooldown end timestamp (ms) */
+  const [printCooldownUntil, setPrintCooldownUntil] = useState<Record<string, number>>({});
+
+  const isOrderPrintOnCooldown = useCallback(
+    (orderId: string) => {
+      const until = printCooldownUntil[orderId];
+      return typeof until === "number" && Date.now() < until;
+    },
+    [printCooldownUntil],
+  );
+
+  const startPrintCooldown = useCallback((orderId: string) => {
+    const until = Date.now() + PRINT_COOLDOWN_MS;
+    setPrintCooldownUntil((prev) => ({ ...prev, [orderId]: until }));
+    window.setTimeout(() => {
+      setPrintCooldownUntil((prev) => {
+        if (prev[orderId] !== until) return prev;
+        const { [orderId]: _removed, ...rest } = prev;
+        return rest;
+      });
+    }, PRINT_COOLDOWN_MS);
+  }, []);
 
   const loadOrders = useCallback(async () => {
     setError("");
@@ -149,11 +173,13 @@ export function RecentOrdersPanel({
 
   const printWholeOrder = useCallback(
     async (o: RecentOrderRow, mode: "kot" | "bill" | "both") => {
+      if (isOrderPrintOnCooldown(o.id)) return;
       const receiptLines = orderLinePayloadsToReceiptLines(o.lines ?? []);
       if (receiptLines.length === 0) {
         setError("No printable lines on this order.");
         return;
       }
+      startPrintCooldown(o.id);
       const kotLines = receiptLines.map((r) => receiptLineToKotLine(r));
       const header = posSettings?.billHeader ?? "";
       const footer = posSettings?.billFooter ?? "";
@@ -198,7 +224,7 @@ export function RecentOrdersPanel({
         setError(String(e instanceof Error ? e.message : e));
       }
     },
-    [desktop, posSettings],
+    [desktop, posSettings, isOrderPrintOnCooldown, startPrintCooldown],
   );
 
   if (initialLoad) {
@@ -284,6 +310,9 @@ export function RecentOrdersPanel({
               const isUpdating = updatingId === o.id;
               const lines = o.lines ?? [];
               const canPrintWhole = orderLinePayloadsToReceiptLines(lines).length > 0;
+              const printOnCooldown = isOrderPrintOnCooldown(o.id);
+              const printButtonsDisabled =
+                !canPrintWhole || !printerConnected || printOnCooldown;
               return (
                 <article
                   key={o.id}
@@ -341,7 +370,8 @@ export function RecentOrdersPanel({
                     <div className="grid grid-cols-3 gap-1">
                       <button
                         type="button"
-                        disabled={!canPrintWhole || !printerConnected}
+                        disabled={printButtonsDisabled}
+                        title={printOnCooldown ? "Wait before printing again" : undefined}
                         onClick={() => void printWholeOrder(o, "kot")}
                         className="h-7 rounded-md border px-1 text-[10px] disabled:opacity-50"
                       >
@@ -349,7 +379,8 @@ export function RecentOrdersPanel({
                       </button>
                       <button
                         type="button"
-                        disabled={!canPrintWhole || !printerConnected}
+                        disabled={printButtonsDisabled}
+                        title={printOnCooldown ? "Wait before printing again" : undefined}
                         onClick={() => void printWholeOrder(o, "bill")}
                         className="h-7 rounded-md border px-1 text-[10px] disabled:opacity-50"
                       >
@@ -357,7 +388,8 @@ export function RecentOrdersPanel({
                       </button>
                       <button
                         type="button"
-                        disabled={!canPrintWhole || !printerConnected}
+                        disabled={printButtonsDisabled}
+                        title={printOnCooldown ? "Wait before printing again" : undefined}
                         onClick={() => void printWholeOrder(o, "both")}
                         className="h-7 rounded-md border px-1 text-[10px] disabled:opacity-50"
                       >

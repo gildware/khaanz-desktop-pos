@@ -644,13 +644,43 @@ function readSilentPrinterNameFromDb(db) {
 
 function writeSilentPrinterNameToDb(db, deviceName) {
   const name = String(deviceName || "").trim();
+  const prev = readSilentPrinterNameFromDb(db);
   db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('silent_printer',?)").run(name);
+  if (prev === name) return;
   clearPrinterVerified(db);
   try {
     db.prepare("DELETE FROM meta WHERE key='print_method_win'").run();
+    db.prepare("DELETE FROM meta WHERE key='print_method_mac'").run();
   } catch {
     /* ignore */
   }
+  try {
+    const { clearCupsQueueCache } = require("./print-mac.cjs");
+    clearCupsQueueCache();
+  } catch {
+    /* ignore */
+  }
+  try {
+    const { clearWindowsPrintCache } = require("./print-diagnostics-windows.cjs");
+    clearWindowsPrintCache();
+  } catch {
+    /* ignore */
+  }
+}
+
+function readWindowsGdiReceiptFromDb(db) {
+  try {
+    const row = db.prepare("SELECT value FROM meta WHERE key='print_gdi_win'").get();
+    if (!row || typeof row.value !== "string") return true;
+    return row.value !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function writeWindowsGdiReceiptToDb(db, gdiReceipt) {
+  const v = gdiReceipt === false ? "0" : "1";
+  db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('print_gdi_win',?)").run(v);
 }
 
 function readPreferredPrintMethodFromDb(db) {
@@ -666,6 +696,21 @@ function writePreferredPrintMethodToDb(db, method) {
   const m = String(method || "").trim();
   if (!m) return;
   db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('print_method_win',?)").run(m);
+}
+
+function readPreferredPrintMethodMacFromDb(db) {
+  try {
+    const row = db.prepare("SELECT value FROM meta WHERE key='print_method_mac'").get();
+    return row && typeof row.value === "string" ? row.value.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+function writePreferredPrintMethodMacToDb(db, method) {
+  const m = String(method || "").trim();
+  if (!m) return;
+  db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('print_method_mac',?)").run(m);
 }
 
 function readPrinterVerifiedName(db) {
@@ -722,7 +767,7 @@ async function waitForPrintDocumentReady(webContents) {
       }
     })
   `);
-  await new Promise((r) => setTimeout(r, 400));
+  await new Promise((r) => setTimeout(r, 80));
 }
 
 async function getPrintersFromAnyWindow() {
@@ -955,33 +1000,75 @@ function isDevMockPrintEnabled() {
   );
 }
 
-/** Direct receipt print — Windows uses driver chain; macOS uses ESC/POS + Electron. */
-async function printReceiptText({ text, title, deviceName: deviceOverride }) {
-  const body = String(text || "").trim();
-  if (!body) {
-    return { ok: false, error: "Nothing to print." };
+/** Windows receipt print — cached method + skip PowerShell when already verified. */
+async function printReceiptWindows(printerName, body, safeTitle, receiptOpts = {}) {
+  const preferred = readPreferredPrintMethodFromDb(db);
+  const fastPath = Boolean(receiptOpts.verifiedFastPath && preferred);
+
+  const r = await withTimeout(
+    printPlainTextWindows(printerName, body, safeTitle, {
+      preferredMethod: preferred,
+      fastPath,
+      gdiReceipt: readWindowsGdiReceiptFromDb(db),
+    }),
+    90_000,
+    "Windows print",
+  );
+  if (r.ok) {
+    if (r.method) writePreferredPrintMethodToDb(db, r.method);
+    if (typeof r.gdiReceipt === "boolean") writeWindowsGdiReceiptToDb(db, r.gdiReceipt);
+    const verifiedName = r.deviceName || printerName;
+    writeSilentPrinterNameToDb(db, verifiedName);
+    setPrinterVerified(db, verifiedName);
+    return r;
+  }
+  const electron = await printReceiptElectron(printerName, body, safeTitle);
+  if (electron.ok) {
+    writePreferredPrintMethodToDb(db, "gdi");
+    writeSilentPrinterNameToDb(db, printerName);
+    setPrinterVerified(db, printerName);
+    return electron;
+  }
+  return r;
+}
+
+/** macOS receipt print — uses cached CUPS/Electron method after first successful job. */
+async function printReceiptDarwin(printerName, body, safeTitle) {
+  const preferredMac = readPreferredPrintMethodMacFromDb(db);
+
+  if (preferredMac === "electron") {
+    const electronFirst = await printReceiptElectron(printerName, body, safeTitle);
+    if (electronFirst.ok) {
+      writeSilentPrinterNameToDb(db, printerName);
+      writePreferredPrintMethodMacToDb(db, "electron");
+      setPrinterVerified(db, printerName);
+      return electronFirst;
+    }
   }
 
+  const r = await printPlainTextMac(printerName, body, safeTitle, {
+    preferredMethod: preferredMac === "electron" ? "" : preferredMac,
+  });
+  if (r.ok) {
+    writeSilentPrinterNameToDb(db, r.deviceName || printerName);
+    if (r.method) writePreferredPrintMethodMacToDb(db, r.method);
+    setPrinterVerified(db, r.deviceName || printerName);
+    return r;
+  }
+
+  const electron = await printReceiptElectron(printerName, body, safeTitle);
+  if (electron.ok) {
+    writeSilentPrinterNameToDb(db, printerName);
+    writePreferredPrintMethodMacToDb(db, "electron");
+    setPrinterVerified(db, printerName);
+    return electron;
+  }
+  return r;
+}
+
+/** Resolve printer for a receipt job; skips slow lpstat when last test print succeeded. */
+async function resolvePrinterForReceipt(deviceOverride) {
   const override = String(deviceOverride || "").trim();
-  const active = await resolveActivePrinterName();
-  let printerName = override || active.name;
-
-  if (isDevMockPrintEnabled()) {
-    return {
-      ok: true,
-      method: "dev-mock",
-      deviceName: printerName || "dev-mock",
-      proof: "mac-dev-mock",
-    };
-  }
-
-  if (!printerName) {
-    return {
-      ok: false,
-      error: "No printer connected. Plug in a printer, install its driver, then Refresh.",
-    };
-  }
-
   if (override) {
     const printers = await getPrintersFromAnyWindow();
     const list = Array.isArray(printers) ? printers : [];
@@ -998,51 +1085,57 @@ async function printReceiptText({ text, title, deviceName: deviceOverride }) {
         error: onlineCheck.detail || "Selected printer is offline. Check USB/power.",
       };
     }
-  } else if (!active.online) {
+    return { ok: true, name: override };
+  }
+
+  const saved = resolveSavedPrinterName();
+  const verified = readPrinterVerifiedName(db);
+  if (saved && verified && verified === saved) {
+    return { ok: true, name: saved, verifiedFastPath: true };
+  }
+
+  const active = await resolveActivePrinterName();
+  if (!active.name) {
+    return {
+      ok: false,
+      error: "No printer connected. Plug in a printer, install its driver, then Refresh.",
+    };
+  }
+  if (!active.online) {
     return {
       ok: false,
       error: "Printer is offline. Check USB/power, then try again.",
     };
   }
+  return { ok: true, name: active.name };
+}
+
+/** Direct receipt print — Windows uses driver chain; macOS uses ESC/POS + Electron. */
+async function printReceiptText({ text, title, deviceName: deviceOverride }) {
+  const body = String(text || "").trim();
+  if (!body) {
+    return { ok: false, error: "Nothing to print." };
+  }
+
+  const resolved = await resolvePrinterForReceipt(deviceOverride);
+  if (!resolved.ok) return { ok: false, error: resolved.error };
+  const printerName = resolved.name;
+
+  if (isDevMockPrintEnabled()) {
+    return {
+      ok: true,
+      method: "dev-mock",
+      deviceName: printerName || "dev-mock",
+      proof: "mac-dev-mock",
+    };
+  }
 
   if (process.platform === "win32") {
-    const preferred = readPreferredPrintMethodFromDb(db);
-    const r = await withTimeout(
-      printPlainTextWindows(printerName, body, title || "Receipt", {
-        preferredMethod: preferred,
-      }),
-      90_000,
-      "Windows print",
-    );
-    if (r.ok) {
-      if (r.method) writePreferredPrintMethodToDb(db, r.method);
-      const verifiedName = r.deviceName || printerName;
-      writeSilentPrinterNameToDb(db, verifiedName);
-      setPrinterVerified(db, verifiedName);
-      return r;
-    }
-    const electron = await printReceiptElectron(printerName, body, title || "Receipt");
-    if (electron.ok) {
-      writeSilentPrinterNameToDb(db, printerName);
-      setPrinterVerified(db, printerName);
-      return electron;
-    }
-    return r;
+    return printReceiptWindows(printerName, body, title || "Receipt", resolved);
   }
 
   if (process.platform === "darwin") {
-    const r = await printPlainTextMac(printerName, body, title || "Receipt");
-    if (r.ok) {
-      writeSilentPrinterNameToDb(db, r.deviceName || printerName);
-      setPrinterVerified(db, r.deviceName || printerName);
-      return r;
-    }
-    const electron = await printReceiptElectron(printerName, body, title || "Receipt");
-    if (electron.ok) {
-      writeSilentPrinterNameToDb(db, printerName);
-      setPrinterVerified(db, printerName);
-    }
-    return electron.ok ? electron : r;
+    return printReceiptDarwin(printerName, body, title || "Receipt");
   }
 
   const electron = await printReceiptElectron(printerName, body, title || "Receipt");
@@ -1140,26 +1233,16 @@ async function printSilentHtml({ html, title }) {
         }
 
         if (process.platform === "win32") {
-          const r = await withTimeout(
-            printPlainTextWindows(chosen, plainText, safeTitle),
-            90_000,
-            "Windows print",
-          );
-          if (r.ok && r.deviceName && r.deviceName !== chosen) {
-            writeSilentPrinterNameToDb(db, r.deviceName);
-          }
+          const verified = readPrinterVerifiedName(db);
+          const r = await printReceiptWindows(chosen, plainText, safeTitle, {
+            verifiedFastPath: Boolean(verified && verified === chosen),
+          });
           settle(r);
           return;
         }
 
         if (process.platform === "darwin") {
-          const r = await printPlainTextMac(chosen, plainText, safeTitle);
-          if (r.ok) {
-            settle(r);
-            return;
-          }
-          const electron = await printReceiptElectron(chosen, plainText, safeTitle);
-          settle(electron.ok ? electron : r);
+          settle(await printReceiptDarwin(chosen, plainText, safeTitle));
           return;
         }
 

@@ -1,4 +1,16 @@
 const { runPowerShellScript, psQuote } = require("./print-ps.cjs");
+const { isLikelyGdiReceiptDriver, isVirtualPort } = require("./print-strategy-windows.cjs");
+
+const CACHE_TTL_MS = 5 * 60_000;
+/** @type {Map<string, { name: string; at: number }>} */
+const resolveCache = new Map();
+/** @type {Map<string, { ctx: object; at: number }>} */
+const contextCache = new Map();
+
+function clearWindowsPrintCache() {
+  resolveCache.clear();
+  contextCache.clear();
+}
 
 async function resolveWindowsPrinterName(printerName) {
   const wanted = String(printerName || "").trim();
@@ -29,17 +41,42 @@ async function resolveWindowsPrinterName(printerName) {
   };
 }
 
-async function getWindowsPrinterDiagnostics(printerName) {
-  const resolved = await resolveWindowsPrinterName(printerName);
-  if (!resolved.ok) {
-    return { ok: false, error: resolved.detail || "Printer not found" };
+async function resolveWindowsPrinterNameCached(printerName) {
+  const wanted = String(printerName || "").trim();
+  if (!wanted) return { ok: false, detail: "No printer selected" };
+  const hit = resolveCache.get(wanted);
+  if (hit && Date.now() - hit.at < CACHE_TTL_MS) {
+    return { ok: true, name: hit.name };
+  }
+  const resolved = await resolveWindowsPrinterName(wanted);
+  if (resolved.ok) {
+    resolveCache.set(wanted, { name: resolved.name, at: Date.now() });
+  }
+  return resolved;
+}
+
+/**
+ * One PowerShell spawn: resolve queue name + port/driver (avoids double cold-start).
+ */
+async function getWindowsPrinterContext(printerName) {
+  const wanted = String(printerName || "").trim();
+  if (!wanted) {
+    return { ok: false, detail: "No printer selected" };
+  }
+
+  const hit = contextCache.get(wanted);
+  if (hit && Date.now() - hit.at < CACHE_TTL_MS) {
+    return hit.ctx;
   }
 
   const script = [
     "$ErrorActionPreference = 'Stop'",
-    `$name = ${psQuote(resolved.name)}`,
-    "$p = Get-Printer -Name $name -ErrorAction Stop",
-    "$driver = Get-PrinterDriver -Name $p.DriverName -ErrorAction SilentlyContinue",
+    `$wanted = ${psQuote(wanted)}`,
+    "$p = Get-Printer -Name $wanted -ErrorAction SilentlyContinue",
+    "if (-not $p) {",
+    "  $p = @(Get-Printer | Where-Object { $_.Name -ieq $wanted }) | Select-Object -First 1",
+    "}",
+    "if (-not $p) { Write-Output 'missing'; exit 2 }",
     "[PSCustomObject]@{",
     "  name = $p.Name",
     "  port = [string]$p.PortName",
@@ -51,18 +88,59 @@ async function getWindowsPrinterDiagnostics(printerName) {
   ].join("\n");
 
   const r = await runPowerShellScript(script, 20_000);
-  if (r.err || !r.stdout) {
+  const out = r.stdout.trim();
+  if (!r.err && out === "missing") {
+    const ctx = {
+      ok: false,
+      detail:
+        "Printer queue not found in Windows. Open Connect printer, click Refresh, and select your receipt printer.",
+    };
+    return ctx;
+  }
+  if (r.err || !out) {
     return {
       ok: false,
       error: r.stderr || (r.err && r.err.message) || "Could not read printer details",
     };
   }
   try {
-    const info = JSON.parse(r.stdout);
-    return { ok: true, ...info, resolvedName: resolved.name };
+    const info = JSON.parse(out);
+    const ctx = {
+      ok: true,
+      ...info,
+      resolvedName: info.name,
+      gdiReceipt: isLikelyGdiReceiptDriver(info.driver, info.port),
+      virtualPort: isVirtualPort(info.port, info.driver),
+    };
+    contextCache.set(wanted, { ctx, at: Date.now() });
+    resolveCache.set(wanted, { name: info.name, at: Date.now() });
+    return ctx;
   } catch {
     return { ok: false, error: "Invalid printer diagnostic response" };
   }
 }
 
-module.exports = { resolveWindowsPrinterName, getWindowsPrinterDiagnostics };
+async function getWindowsPrinterDiagnostics(printerName) {
+  const ctx = await getWindowsPrinterContext(printerName);
+  if (!ctx.ok) {
+    return { ok: false, error: ctx.detail || ctx.error || "Printer not found" };
+  }
+  return {
+    ok: true,
+    name: ctx.name,
+    port: ctx.port,
+    driver: ctx.driver,
+    shared: ctx.shared,
+    workOffline: ctx.workOffline,
+    status: ctx.status,
+    resolvedName: ctx.resolvedName,
+  };
+}
+
+module.exports = {
+  resolveWindowsPrinterName,
+  resolveWindowsPrinterNameCached,
+  getWindowsPrinterDiagnostics,
+  getWindowsPrinterContext,
+  clearWindowsPrintCache,
+};

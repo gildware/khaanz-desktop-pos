@@ -70,7 +70,7 @@ async function printReceiptPdfWindows(deviceName, plainText, title) {
         else done();
       })
     `);
-    await new Promise((r) => setTimeout(r, 350));
+    await new Promise((r) => setTimeout(r, 80));
 
     const contentPx = await win.webContents.executeJavaScript(`
       Math.ceil(Math.max(

@@ -5,9 +5,18 @@ const { spawn } = require("child_process");
 const { buildEscPosBuffer, buildPlainTextBuffer } = require("./escpos-buffer.cjs");
 const { appendPrintLog } = require("./print-log.cjs");
 const { printReceiptElectron } = require("./print-electron-receipt.cjs");
+const { reorderAttempts } = require("./print-strategy-windows.cjs");
+const { isLikelyReceiptPrinterName } = require("./printer-resolve.cjs");
 
 const LPR = "/usr/bin/lpr";
 const LPSTAT = "/usr/bin/lpstat";
+const LPR_TIMEOUT_MS = 10_000;
+/** Fail fast when probing raw modes that the driver does not support. */
+const LPR_PROBE_TIMEOUT_MS = 2500;
+
+/** @type {Map<string, { cupsName: string; at: number }>} */
+const cupsQueueCache = new Map();
+const CUPS_CACHE_TTL_MS = 5 * 60_000;
 
 function getPrintTempDir() {
   let base;
@@ -91,6 +100,20 @@ async function resolveCupsQueueName(requested) {
   return partial || name;
 }
 
+async function resolveCupsQueueNameCached(requested) {
+  const name = String(requested || "").trim();
+  if (!name) return "";
+  const hit = cupsQueueCache.get(name);
+  if (hit && Date.now() - hit.at < CUPS_CACHE_TTL_MS) return hit.cupsName;
+  const cupsName = await resolveCupsQueueName(name);
+  cupsQueueCache.set(name, { cupsName, at: Date.now() });
+  return cupsName;
+}
+
+function clearCupsQueueCache() {
+  cupsQueueCache.clear();
+}
+
 /** CUPS queue online check. */
 async function checkMacPrinterOnline(printerName) {
   const name = String(printerName || "").trim();
@@ -132,7 +155,7 @@ async function checkMacPrinterOnline(printerName) {
   }
 }
 
-async function lprBuffer(cupsName, buffer, title, raw, methodId) {
+async function lprBuffer(cupsName, buffer, title, raw, methodId, timeoutMs = LPR_TIMEOUT_MS) {
   const dir = getPrintTempDir();
   const ext = raw ? "bin" : "txt";
   const filePath = path.join(dir, `job-${Date.now()}.${ext}`);
@@ -141,7 +164,7 @@ async function lprBuffer(cupsName, buffer, title, raw, methodId) {
     ? ["-P", cupsName, "-o", "raw", "-J", title || "Receipt", filePath]
     : ["-P", cupsName, "-J", title || "Receipt", filePath];
   try {
-    await runCommand(LPR, args, 10_000);
+    await runCommand(LPR, args, timeoutMs);
     return { ok: true, method: methodId };
   } finally {
     try {
@@ -152,45 +175,126 @@ async function lprBuffer(cupsName, buffer, title, raw, methodId) {
   }
 }
 
+function buildMacCupsAttempts(cupsName, body, safeTitle, options = {}) {
+  const rawFirst = isLikelyReceiptPrinterName(cupsName);
+  const base = rawFirst
+    ? [
+        {
+          methodId: "escpos-raw",
+          run: (timeoutMs) =>
+            lprBuffer(cupsName, buildEscPosBuffer(body), safeTitle, true, "escpos-raw", timeoutMs),
+        },
+        {
+          methodId: "text-raw",
+          run: (timeoutMs) =>
+            lprBuffer(
+              cupsName,
+              buildPlainTextBuffer(body),
+              safeTitle,
+              true,
+              "text-raw",
+              timeoutMs,
+            ),
+        },
+        {
+          methodId: "cups-text",
+          run: (timeoutMs) =>
+            lprBuffer(
+              cupsName,
+              buildPlainTextBuffer(body),
+              safeTitle,
+              false,
+              "cups-text",
+              timeoutMs,
+            ),
+        },
+      ]
+    : [
+        {
+          methodId: "cups-text",
+          run: (timeoutMs) =>
+            lprBuffer(
+              cupsName,
+              buildPlainTextBuffer(body),
+              safeTitle,
+              false,
+              "cups-text",
+              timeoutMs,
+            ),
+        },
+        {
+          methodId: "escpos-raw",
+          run: (timeoutMs) =>
+            lprBuffer(cupsName, buildEscPosBuffer(body), safeTitle, true, "escpos-raw", timeoutMs),
+        },
+        {
+          methodId: "text-raw",
+          run: (timeoutMs) =>
+            lprBuffer(
+              cupsName,
+              buildPlainTextBuffer(body),
+              safeTitle,
+              true,
+              "text-raw",
+              timeoutMs,
+            ),
+        },
+      ];
+  return reorderAttempts(base, options.preferredMethod);
+}
+
+function lprTimeoutForAttempt(methodId, hasPreferred) {
+  if (methodId === "cups-text") return LPR_TIMEOUT_MS;
+  if (hasPreferred) return LPR_PROBE_TIMEOUT_MS;
+  return LPR_PROBE_TIMEOUT_MS;
+}
+
 /**
- * Print receipt on macOS — tries ESC/POS raw (thermal), plain CUPS, then Electron GDI.
+ * Print receipt on macOS — CUPS (cached preferred method first), then Electron GDI.
  */
-async function printPlainTextMac(printerName, text, title) {
+async function printPlainTextMac(printerName, text, title, options = {}) {
   const name = String(printerName || "").trim();
   if (!name) return { ok: false, error: "No printer selected." };
   const body = String(text || "").trim();
   if (!body) return { ok: false, error: "Nothing to print." };
 
-  const cupsName = await resolveCupsQueueName(name);
+  const cupsName = await resolveCupsQueueNameCached(name);
   const safeTitle = title || "Receipt";
   const errors = [];
+  const preferred = String(options.preferredMethod || "").trim();
+  const cupsAttempts = buildMacCupsAttempts(cupsName, body, safeTitle, options);
+  const triedPreferred = new Set();
 
-  const cupsAttempts = [
-    {
-      methodId: "escpos-raw",
-      run: () => lprBuffer(cupsName, buildEscPosBuffer(body), safeTitle, true, "escpos-raw"),
-    },
-    {
-      methodId: "text-raw",
-      run: () => lprBuffer(cupsName, buildPlainTextBuffer(body), safeTitle, true, "text-raw"),
-    },
-    {
-      methodId: "cups-text",
-      run: () => lprBuffer(cupsName, buildPlainTextBuffer(body), safeTitle, false, "cups-text"),
-    },
-  ];
+  async function runAttempt(attempt, timeoutMs) {
+    const r = await attempt.run(timeoutMs);
+    appendPrintLog({
+      event: "print-ok",
+      platform: "darwin",
+      method: r.method,
+      printer: cupsName,
+      title: safeTitle,
+    });
+    return { ok: true, method: r.method, deviceName: cupsName };
+  }
+
+  if (preferred && preferred !== "electron") {
+    const pref = cupsAttempts.find((a) => a.methodId === preferred);
+    if (pref) {
+      triedPreferred.add(preferred);
+      try {
+        return await runAttempt(pref, LPR_TIMEOUT_MS);
+      } catch (e) {
+        const msg = String(e && e.message ? e.message : e);
+        errors.push(`${preferred}: ${msg}`);
+      }
+    }
+  }
 
   for (const attempt of cupsAttempts) {
+    if (triedPreferred.has(attempt.methodId)) continue;
+    const timeoutMs = lprTimeoutForAttempt(attempt.methodId, Boolean(preferred));
     try {
-      const r = await attempt.run();
-      appendPrintLog({
-        event: "print-ok",
-        platform: "darwin",
-        method: r.method,
-        printer: cupsName,
-        title: safeTitle,
-      });
-      return { ok: true, method: r.method, deviceName: cupsName };
+      return await runAttempt(attempt, timeoutMs);
     } catch (e) {
       const msg = String(e && e.message ? e.message : e);
       errors.push(`${attempt.methodId}: ${msg}`);
@@ -226,5 +330,7 @@ async function printPlainTextMac(printerName, text, title) {
 module.exports = {
   checkMacPrinterOnline,
   resolveCupsQueueName,
+  resolveCupsQueueNameCached,
+  clearCupsQueueCache,
   printPlainTextMac,
 };

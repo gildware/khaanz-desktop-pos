@@ -9,18 +9,18 @@ const { printGdiDotNetWindows } = require("./print-gdi-dotnet.cjs");
 const { printEscPosToPortWindows } = require("./print-port-raw.cjs");
 const {
   resolveWindowsPrinterName,
+  resolveWindowsPrinterNameCached,
+  getWindowsPrinterContext,
   getWindowsPrinterDiagnostics,
 } = require("./print-diagnostics-windows.cjs");
 const { verifyWindowsSpoolerActivity } = require("./print-spooler-windows.cjs");
-const {
-  reorderAttempts,
-  isLikelyGdiReceiptDriver,
-  isVirtualPort,
-} = require("./print-strategy-windows.cjs");
+const { reorderAttempts } = require("./print-strategy-windows.cjs");
 const { appendPrintLog } = require("./print-log.cjs");
 const { withTimeout } = require("./print-timeout.cjs");
 
 const PRINT_OVERALL_TIMEOUT_MS = 90_000;
+const PREFERRED_METHOD_TIMEOUT_MS = 40_000;
+const FALLBACK_METHOD_TIMEOUT_MS = 12_000;
 
 const RAW_PRINTER_HELPER_CS = `
 using System;
@@ -86,7 +86,7 @@ public class KhaanzRawPrinter {
 `;
 
 async function checkWindowsPrinterOnline(printerName) {
-  const resolved = await resolveWindowsPrinterName(printerName);
+  const resolved = await resolveWindowsPrinterNameCached(printerName);
   if (!resolved.ok) {
     return { ok: true, online: false, detail: resolved.detail };
   }
@@ -387,6 +387,30 @@ async function confirmPrintSucceeded(printerName, methodId, attemptResult) {
   };
 }
 
+async function tryWindowsPrintAttempt(name, attempt, timeoutMs, tried, errors) {
+  let r;
+  try {
+    r = await withTimeout(attempt.run(), timeoutMs, `${attempt.methodId} print`);
+  } catch (e) {
+    r = { ok: false, error: String(e && e.message ? e.message : e) };
+  }
+  if (!r.ok) {
+    tried.push({ method: attempt.methodId, ok: false, error: r.error || "failed" });
+    if (r.error) errors.push(`${attempt.methodId}: ${r.error}`);
+    return null;
+  }
+
+  const confirmed = await confirmPrintSucceeded(name, attempt.methodId, r);
+  if (confirmed.ok) {
+    const method = r.method || attempt.methodId;
+    tried.push({ method, ok: true, proof: confirmed.proof });
+    return { ok: true, deviceName: name, method, proof: confirmed.proof };
+  }
+  tried.push({ method: attempt.methodId, ok: false, error: confirmed.error || "not confirmed" });
+  errors.push(`${attempt.methodId}: ${confirmed.error || "not confirmed"}`);
+  return null;
+}
+
 /**
  * Print on Windows — GDI methods for BillQuick/Petpooja drivers; spooler-checked success.
  */
@@ -400,24 +424,27 @@ async function printPlainTextWindows(deviceName, text, title, options = {}) {
     return { ok: false, error: "Nothing to print." };
   }
 
-  const resolved = await resolveWindowsPrinterName(wanted);
-  if (!resolved.ok) {
-    return { ok: false, error: resolved.detail || friendlyWindowsPrintError("") };
-  }
+  const preferred = String(options.preferredMethod || "").trim();
+  const fastPath = Boolean(options.fastPath && preferred);
 
-  const name = resolved.name;
-  const diag = await getWindowsPrinterDiagnostics(wanted);
-  if (diag.ok && isVirtualPort(diag.port, diag.driver)) {
-    return {
-      ok: false,
-      error:
-        "That queue is a PDF/virtual printer, not your thermal receipt printer. Pick the same name as Petpooja (e.g. BillQuick Lite).",
-    };
-  }
+  let name = wanted;
+  let gdiReceipt = options.gdiReceipt !== false;
 
-  const gdiReceipt = diag.ok
-    ? isLikelyGdiReceiptDriver(diag.driver, diag.port)
-    : true;
+  if (!fastPath) {
+    const ctx = await getWindowsPrinterContext(wanted);
+    if (!ctx.ok) {
+      return { ok: false, error: ctx.detail || ctx.error || friendlyWindowsPrintError("") };
+    }
+    name = ctx.resolvedName || ctx.name;
+    if (ctx.virtualPort) {
+      return {
+        ok: false,
+        error:
+          "That queue is a PDF/virtual printer, not your thermal receipt printer. Pick the same name as Petpooja (e.g. BillQuick Lite).",
+      };
+    }
+    gdiReceipt = ctx.gdiReceipt !== false;
+  }
 
   const attempts = buildWindowsPrintAttempts(name, body, title, {
     ...options,
@@ -426,46 +453,62 @@ async function printPlainTextWindows(deviceName, text, title, options = {}) {
 
   const errors = [];
   const tried = [];
+  const triedPreferred = new Set();
   const deadline = Date.now() + PRINT_OVERALL_TIMEOUT_MS;
+
+  if (preferred) {
+    const pref = attempts.find((a) => a.methodId === preferred);
+    if (pref) {
+      triedPreferred.add(preferred);
+      const remaining = deadline - Date.now();
+      if (remaining > 0) {
+        const hit = await tryWindowsPrintAttempt(
+          name,
+          pref,
+          Math.min(remaining, PREFERRED_METHOD_TIMEOUT_MS),
+          tried,
+          errors,
+        );
+        if (hit) {
+          appendPrintLog({
+            event: "print-ok",
+            printer: name,
+            title: title || "Receipt",
+            gdiReceipt,
+            method: hit.method,
+            proof: hit.proof,
+            tried,
+            fastPath,
+          });
+          return { ...hit, gdiReceipt };
+        }
+      }
+    }
+  }
+
   for (const attempt of attempts) {
+    if (triedPreferred.has(attempt.methodId)) continue;
     const remaining = deadline - Date.now();
     if (remaining <= 0) {
       errors.push("overall timeout");
       break;
     }
-    let r;
-    try {
-      r = await withTimeout(
-        attempt.run(),
-        Math.min(remaining, 35_000),
-        `${attempt.methodId} print`,
-      );
-    } catch (e) {
-      r = { ok: false, error: String(e && e.message ? e.message : e) };
-    }
-    if (!r.ok) {
-      tried.push({ method: attempt.methodId, ok: false, error: r.error || "failed" });
-      if (r.error) errors.push(`${attempt.methodId}: ${r.error}`);
-      continue;
-    }
-
-    const confirmed = await confirmPrintSucceeded(name, attempt.methodId, r);
-    if (confirmed.ok) {
-      const method = r.method || attempt.methodId;
-      tried.push({ method, ok: true, proof: confirmed.proof });
+    const timeoutMs = preferred
+      ? Math.min(remaining, FALLBACK_METHOD_TIMEOUT_MS)
+      : Math.min(remaining, 35_000);
+    const hit = await tryWindowsPrintAttempt(name, attempt, timeoutMs, tried, errors);
+    if (hit) {
       appendPrintLog({
         event: "print-ok",
         printer: name,
         title: title || "Receipt",
         gdiReceipt,
-        method,
-        proof: confirmed.proof,
+        method: hit.method,
+        proof: hit.proof,
         tried,
       });
-      return { ok: true, deviceName: name, method, proof: confirmed.proof };
+      return { ...hit, gdiReceipt };
     }
-    tried.push({ method: attempt.methodId, ok: false, error: confirmed.error || "not confirmed" });
-    errors.push(`${attempt.methodId}: ${confirmed.error || "not confirmed"}`);
   }
 
   const detail = errors.filter(Boolean).join(" | ");

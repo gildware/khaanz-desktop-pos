@@ -68,7 +68,7 @@ async function printReceiptGdiWindows(deviceName, plainText, title) {
     win.webContents.once("did-finish-load", () => {
       void (async () => {
         try {
-          await new Promise((r) => setTimeout(r, 1200));
+          await new Promise((r) => setTimeout(r, 80));
           await win.webContents.executeJavaScript(`
             new Promise((resolve) => {
               const done = () => requestAnimationFrame(() => requestAnimationFrame(resolve));
