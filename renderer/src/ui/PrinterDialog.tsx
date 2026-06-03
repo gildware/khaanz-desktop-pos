@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { Loader2Icon, XIcon } from "lucide-react";
+import { withIpcTimeout } from "../lib/ipc-timeout";
 
 type PrinterRow = { name: string; isDefault?: boolean };
 
@@ -20,6 +21,7 @@ type PrinterStatus = {
   verified: boolean;
   connected: boolean;
   ready?: boolean;
+  autoSelected?: boolean;
   deviceName: string;
   statusDetail?: string;
   diagnostics?: PrinterDiagnostics | null;
@@ -32,11 +34,34 @@ type Props = {
   onSaved: () => void;
 };
 
-function isLikelyReceiptPrinter(name: string): boolean {
-  const n = name.toLowerCase();
-  return /billquick|pos\s*80|pos\s*58|pos-?80|pos-?58|203dpi|thermal|receipt|tm-|tsp|star\s|epson\s*tm|xprinter|bixolon|generic\/text|generic.text/i.test(
-    n,
-  );
+function pickDefaultFromList(printers: PrinterRow[]): string {
+  const def = printers.find((p) => p.isDefault);
+  return def?.name || printers[0]?.name || "";
+}
+
+function liveStatusLine(status: PrinterStatus | null): { text: string; className: string } {
+  if (!status?.printers?.length) {
+    return {
+      text: "No printers found — connect USB and install the driver, then Refresh.",
+      className: "text-muted-foreground",
+    };
+  }
+  if (status.connected && status.deviceName) {
+    const auto = status.autoSelected ? " (auto)" : "";
+    return {
+      text: status.verified
+        ? `Connected — ${status.deviceName}${auto}`
+        : `Connected — ${status.deviceName}${auto}. Run Test print to confirm.`,
+      className: "text-emerald-600 dark:text-emerald-400",
+    };
+  }
+  if (status.statusDetail) {
+    return { text: status.statusDetail, className: "text-amber-700 dark:text-amber-400" };
+  }
+  return {
+    text: "Printer disconnected — check USB/power.",
+    className: "text-amber-700 dark:text-amber-400",
+  };
 }
 
 export function PrinterDialog({ open, onClose, onSaved }: Props) {
@@ -44,17 +69,27 @@ export function PrinterDialog({ open, onClose, onSaved }: Props) {
   const [printers, setPrinters] = useState<PrinterRow[]>([]);
   const [deviceName, setDeviceName] = useState("");
   const [status, setStatus] = useState<PrinterStatus | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [testBusy, setTestBusy] = useState(false);
   const [testMessage, setTestMessage] = useState("");
   const [error, setError] = useState("");
 
   const refresh = useCallback(async () => {
     if (!desktop?.getPrinterStatus) return;
-    const r = await desktop.getPrinterStatus();
-    if (!r.ok) return;
-    setStatus(r);
-    setPrinters(r.printers ?? []);
-    setDeviceName(r.deviceName || "");
+    try {
+      const r = await withIpcTimeout(desktop.getPrinterStatus(), 8000, "Printer status");
+      if (!r.ok) return;
+      setStatus(r);
+      const list = r.printers ?? [];
+      setPrinters(list);
+      setDeviceName((prev) => {
+        if (r.deviceName) return r.deviceName;
+        if (prev && list.some((p) => p.name === prev)) return prev;
+        return pickDefaultFromList(list);
+      });
+    } catch {
+      /* keep last known status */
+    }
   }, [desktop]);
 
   useEffect(() => {
@@ -62,9 +97,13 @@ export function PrinterDialog({ open, onClose, onSaved }: Props) {
     setTestMessage("");
     setError("");
     void refresh();
+    const pollId = setInterval(() => {
+      void refresh();
+    }, 2500);
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
+      clearInterval(pollId);
       document.body.style.overflow = prev;
     };
   }, [open, refresh]);
@@ -76,30 +115,41 @@ export function PrinterDialog({ open, onClose, onSaved }: Props) {
       setError("Select a printer from the list.");
       return;
     }
-    setBusy(true);
+    setSaveBusy(true);
     setError("");
     setTestMessage("");
     try {
-      const out = await desktop.setSilentPrinter(name);
+      const out = await withIpcTimeout(
+        desktop.setSilentPrinter(name),
+        15000,
+        "Save printer",
+      );
       if (!out.ok) {
         setError(out.error || "Could not set printer.");
         return;
       }
       await refresh();
       onSaved();
-      setTestMessage("Saved. Click Test print — receipt paper should come out.");
+      setTestMessage("Printer saved. Click Test print to confirm paper output.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      setSaveBusy(false);
     }
   }
 
   async function testPrint() {
     if (!desktop?.testPrint) return;
-    setBusy(true);
+    const name = deviceName.trim();
+    if (!name) {
+      setError("Select a printer from the list first.");
+      return;
+    }
+    setTestBusy(true);
     setError("");
     setTestMessage("");
     try {
-      const out = await desktop.testPrint();
+      const out = await withIpcTimeout(desktop.testPrint(name), 100_000, "Test print");
       if (!out.ok) {
         setError(out.error || "Test print failed.");
         await refresh();
@@ -107,37 +157,26 @@ export function PrinterDialog({ open, onClose, onSaved }: Props) {
       }
       setTestMessage(
         out.method
-          ? `Printed via ${out.method} (confirmed). Check receipt paper now.`
-          : "Test print sent. Check your receipt printer now.",
+          ? `Printed via ${out.method}. Check your printer now.`
+          : "Test print sent. Check your printer now.",
       );
       await refresh();
       onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      await refresh();
     } finally {
-      setBusy(false);
+      setTestBusy(false);
     }
   }
 
   if (!open) return null;
 
+  const busy = saveBusy || testBusy;
   const selected = deviceName.trim();
   const selectedInList = Boolean(selected && printers.some((p) => p.name === selected));
-  const saved = Boolean(status?.saved);
-  const showTestPrint = Boolean(selectedInList && (saved || selected));
-
-  let statusLine = "Pick the same printer name as Petpooja, then Save.";
-  let statusClass = "text-muted-foreground";
-  if (status?.connected) {
-    statusLine = `Ready — ${status.deviceName}`;
-    statusClass = "text-emerald-600 dark:text-emerald-400";
-  } else if (saved) {
-    statusLine = `${status.deviceName} saved — run Test print.`;
-    statusClass = "text-amber-700 dark:text-amber-400";
-  }
-
-  const receiptHint =
-    selected && !isLikelyReceiptPrinter(selected)
-      ? "Warning: this looks like an office/PDF printer. Use BillQuick Lite or your 80mm thermal queue."
-      : null;
+  const showTestPrint = Boolean(selectedInList && printers.length > 0);
+  const { text: statusLine, className: statusClass } = liveStatusLine(status);
 
   const diag = status?.diagnostics;
   const diagLine =
@@ -162,10 +201,10 @@ export function PrinterDialog({ open, onClose, onSaved }: Props) {
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
               <h2 id="printer-dialog-title" className="font-semibold text-lg leading-tight">
-                Connect printer
+                Printer
               </h2>
               <p className="mt-1 text-muted-foreground text-sm leading-normal">
-                Same queue name as Petpooja (e.g. BillQuick Lite).
+                Any printer connected to this PC works — USB, network, or Bluetooth.
               </p>
             </div>
             <button
@@ -209,11 +248,10 @@ export function PrinterDialog({ open, onClose, onSaved }: Props) {
                     </option>
                   ))}
                 </select>
-                {receiptHint ? (
-                  <p className="text-amber-800 text-xs leading-normal dark:text-amber-300">
-                    {receiptHint}
-                  </p>
-                ) : null}
+                <p className="text-muted-foreground text-xs leading-normal">
+                  Leave on the default to auto-use any connected printer. Pick another only if you
+                  have multiple.
+                </p>
                 {diagLine ? (
                   <p className="text-muted-foreground text-xs leading-normal">{diagLine}</p>
                 ) : null}
@@ -247,19 +285,21 @@ export function PrinterDialog({ open, onClose, onSaved }: Props) {
               disabled={busy}
               className="inline-flex h-9 items-center gap-2 rounded-md border bg-background px-3 text-sm disabled:opacity-50"
             >
-              {busy ? <Loader2Icon className="size-4 animate-spin" /> : null}
+              {testBusy ? <Loader2Icon className="size-4 animate-spin" /> : null}
               Test print
             </button>
           ) : null}
-          <button
-            type="button"
-            onClick={() => void save()}
-            disabled={busy || !selectedInList}
-            className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-primary-foreground text-sm disabled:opacity-50"
-          >
-            {busy ? <Loader2Icon className="size-4 animate-spin" /> : null}
-            Save printer
-          </button>
+          {selectedInList ? (
+            <button
+              type="button"
+              onClick={() => void save()}
+              disabled={busy}
+              className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-primary-foreground text-sm disabled:opacity-50"
+            >
+              {saveBusy ? <Loader2Icon className="size-4 animate-spin" /> : null}
+              Use this printer
+            </button>
+          ) : null}
         </footer>
       </div>
     </div>,

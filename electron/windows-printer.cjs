@@ -18,6 +18,9 @@ const {
   isVirtualPort,
 } = require("./print-strategy-windows.cjs");
 const { appendPrintLog } = require("./print-log.cjs");
+const { withTimeout } = require("./print-timeout.cjs");
+
+const PRINT_OVERALL_TIMEOUT_MS = 90_000;
 
 const RAW_PRINTER_HELPER_CS = `
 using System;
@@ -423,8 +426,23 @@ async function printPlainTextWindows(deviceName, text, title, options = {}) {
 
   const errors = [];
   const tried = [];
+  const deadline = Date.now() + PRINT_OVERALL_TIMEOUT_MS;
   for (const attempt of attempts) {
-    const r = await attempt.run();
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      errors.push("overall timeout");
+      break;
+    }
+    let r;
+    try {
+      r = await withTimeout(
+        attempt.run(),
+        Math.min(remaining, 35_000),
+        `${attempt.methodId} print`,
+      );
+    } catch (e) {
+      r = { ok: false, error: String(e && e.message ? e.message : e) };
+    }
     if (!r.ok) {
       tried.push({ method: attempt.methodId, ok: false, error: r.error || "failed" });
       if (r.error) errors.push(`${attempt.methodId}: ${r.error}`);

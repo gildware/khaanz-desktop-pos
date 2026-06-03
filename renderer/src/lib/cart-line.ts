@@ -1,5 +1,9 @@
 import type { CartAddonWithQty, MenuVariation } from "../types";
 
+export function buildComboLineId(comboId: string): string {
+  return `combo::${comboId}`;
+}
+
 export function buildLineId(
   itemId: string,
   variation: MenuVariation,

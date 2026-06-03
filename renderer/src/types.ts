@@ -36,6 +36,23 @@ export type MenuItem = {
   addons: MenuAddon[];
 };
 
+export type MenuComboComponent = {
+  itemId: string;
+  variationId: string;
+  quantity?: number;
+};
+
+export type MenuCombo = {
+  id: string;
+  name: string;
+  description: string;
+  image: string;
+  price: number;
+  components: MenuComboComponent[];
+  isVeg: boolean;
+  available?: boolean;
+};
+
 export type CartItemLine = {
   kind?: "item";
   lineId: string;
@@ -49,6 +66,19 @@ export type CartItemLine = {
   taxRateBps: number;
 };
 
+export type CartComboLine = {
+  kind: "combo";
+  lineId: string;
+  comboId: string;
+  name: string;
+  image: string;
+  isVeg: boolean;
+  qty: number;
+  unitPriceCents: number;
+  taxRateBps: number;
+  componentSummary: string;
+};
+
 export type CartOpenLine = {
   kind: "open";
   lineId: string;
@@ -58,7 +88,7 @@ export type CartOpenLine = {
   taxRateBps: number;
 };
 
-export type CartLine = CartItemLine | CartOpenLine;
+export type CartLine = CartItemLine | CartComboLine | CartOpenLine;
 
 export type FulfillmentMode = "dine_in" | "pickup" | "delivery";
 
@@ -139,6 +169,7 @@ export type MenuPayload = {
   categories: MenuCategory[];
   globalAddons?: MenuAddon[];
   items: MenuItem[];
+  combos?: MenuCombo[];
 };
 
 export type CreateOrderLine = {
@@ -269,12 +300,13 @@ export type KhaanzDesktopApi = {
     verified: boolean;
         connected: boolean;
         ready?: boolean;
+        autoSelected?: boolean;
         deviceName: string;
     statusDetail?: string;
     printers: Array<{ name: string; isDefault?: boolean; status?: string }>;
     error?: string;
   }>;
-  testPrint: () => Promise<{ ok: true; method?: string } | { ok: false; error: string }>;
+  testPrint: (deviceName?: string) => Promise<{ ok: true; method?: string } | { ok: false; error: string }>;
   listRecentPosOrders: () => Promise<
     { ok: true; orders: RecentOrderRow[] } | { ok: false; error: string }
   >;

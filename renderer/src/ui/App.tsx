@@ -11,7 +11,9 @@ import {
   WifiIcon,
   WifiOffIcon,
 } from "lucide-react";
-import { buildLineId, computeUnitPrice, rupeesToCents } from "../lib/cart-line";
+import { buildComboLineId, buildLineId, computeUnitPrice, rupeesToCents } from "../lib/cart-line";
+import { formatComboComponentSummary, isComboAvailable } from "../lib/menu-combos";
+import { resolveMenuMediaUrl } from "../lib/menu-media";
 import { computePosBillTotals, parseRupeeInputToCents } from "../lib/billing-utils";
 import {
   buildDeliveryFooterNote,
@@ -27,13 +29,16 @@ import {
   printPosBillThermal,
   printPosKotThermal,
 } from "../lib/pos-print";
+import { withIpcTimeout } from "../lib/ipc-timeout";
 import type {
   CartAddonWithQty,
   CartItemLine,
   CartLine,
   CartOpenLine,
   FulfillmentMode,
+  CartComboLine,
   MenuCategory,
+  MenuCombo,
   MenuItem,
   MenuPayload,
   PosSettings,
@@ -56,20 +61,38 @@ function formatFromPrice(item: MenuItem) {
   return `from ${money(rupeesToCents(min))}`;
 }
 
-function normalizePayloadItems(menu: MenuPayload): MenuItem[] {
-  return menu.items
+function normalizeMenuFromPayload(
+  menu: MenuPayload,
+  apiOrigin: string | null,
+): { items: MenuItem[]; combos: MenuCombo[] } {
+  const resolve = (url: string) => resolveMenuMediaUrl(url, apiOrigin);
+  const items = (menu.items ?? [])
     .filter((item) => item.available !== false)
     .map((item) => ({
       id: item.id,
       name: item.name,
       category: item.category || "Menu",
       description: item.description || "",
-      image: item.image || "",
+      image: resolve(item.image || ""),
       isVeg: item.isVeg,
       available: item.available,
       variations: item.variations ?? [],
-      addons: item.addons ?? [],
+      addons: (item.addons ?? []).map((a) => ({
+        ...a,
+        image: a.image ? resolve(a.image) : a.image,
+      })),
     }));
+  const combos = (menu.combos ?? []).map((combo) => ({
+    id: combo.id,
+    name: combo.name,
+    description: combo.description || "",
+    image: resolve(combo.image || ""),
+    price: combo.price,
+    components: combo.components ?? [],
+    isVeg: combo.isVeg,
+    available: combo.available,
+  }));
+  return { items, combos };
 }
 
 function fulfillmentLabel(mode: FulfillmentMode) {
@@ -79,13 +102,19 @@ function fulfillmentLabel(mode: FulfillmentMode) {
 }
 
 const CAT_OPEN = "__pos_open__";
+const CAT_COMBOS = "__pos_combos__";
 
 function isCartOpenLine(line: CartLine): line is CartOpenLine {
   return line.kind === "open";
 }
 
+function isCartComboLine(line: CartLine): line is CartComboLine {
+  return line.kind === "combo";
+}
+
 function cartLineTitle(line: CartLine) {
   if (isCartOpenLine(line)) return `${line.name} (Open)`;
+  if (isCartComboLine(line)) return `${line.name} (Combo)`;
   return `${line.name} (${line.variation.name})`;
 }
 
@@ -98,6 +127,19 @@ function cartToOrderLines(cart: CartLine[]) {
         name: l.name,
         quantity: l.qty,
         unitPrice: l.unitPriceCents / 100,
+      };
+    }
+    if (isCartComboLine(l)) {
+      return {
+        kind: "combo" as const,
+        lineId: l.lineId,
+        comboId: l.comboId,
+        name: l.name,
+        image: l.image,
+        isVeg: l.isVeg,
+        quantity: l.qty,
+        unitPrice: l.unitPriceCents / 100,
+        componentSummary: l.componentSummary,
       };
     }
     return {
@@ -139,6 +181,7 @@ export function App() {
   }, [notice]);
 
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
+  const [menuCombos, setMenuCombos] = useState<MenuCombo[]>([]);
   const [categories, setCategories] = useState<MenuCategory[]>([]);
   const [activeCategory, setActiveCategory] = useState(CAT_OPEN);
   const [menuQuery, setMenuQuery] = useState("");
@@ -164,9 +207,11 @@ export function App() {
   const [submittingMode, setSubmittingMode] = useState<SubmitMode | null>(null);
   const [lastBill, setLastBill] = useState<{ orderRef: string } | null>(null);
   const [printerDialogOpen, setPrinterDialogOpen] = useState(false);
+  const [printerSaved, setPrinterSaved] = useState(false);
   const [printerConnected, setPrinterConnected] = useState(false);
-  /** Saved queue exists and Windows reports online — can attempt print. */
+  /** Saved queue exists and OS reports online — can attempt print. */
   const [printerReady, setPrinterReady] = useState(false);
+  const [printerStatusDetail, setPrinterStatusDetail] = useState("");
 
   const [dialogItem, setDialogItem] = useState<MenuItem | null>(null);
   const [variationId, setVariationId] = useState("");
@@ -176,14 +221,17 @@ export function App() {
   const [openItemModalOpen, setOpenItemModalOpen] = useState(false);
 
   const loadMenu = useCallback(async () => {
+    const apiOrigin = boot?.apiOrigin ?? null;
     const payload = await api.getMenuPayload();
     if (payload.ok) {
-      setMenuItems(normalizePayloadItems(payload.menu));
+      const { items, combos } = normalizeMenuFromPayload(payload.menu, apiOrigin);
+      setMenuItems(items);
+      setMenuCombos(combos);
       const cats = payload.menu.categories
         .filter((c) => c.name)
         .map((c) => ({
           name: c.name,
-          image: c.image || "",
+          image: resolveMenuMediaUrl(c.image || "", apiOrigin),
           icon: c.icon || "utensils-crossed",
         }));
       setCategories(cats);
@@ -208,10 +256,11 @@ export function App() {
           addons: [],
         })),
       );
+      setMenuCombos([]);
       setCategories([{ name: "Menu", image: "", icon: "utensils-crossed" }]);
       setActiveCategory(CAT_OPEN);
     }
-  }, [api, session?.id]);
+  }, [api, session?.id, boot?.apiOrigin]);
 
   const loadPosSettings = useCallback(async () => {
     const r = await api.getPosSettings();
@@ -220,22 +269,34 @@ export function App() {
 
   const refreshPrinterStatus = useCallback(async () => {
     if (!desktop?.getPrinterStatus) {
+      setPrinterSaved(false);
       setPrinterConnected(false);
       setPrinterReady(false);
+      setPrinterStatusDetail("");
       return;
     }
     try {
-      const status = await desktop.getPrinterStatus();
+      const status = await withIpcTimeout(
+        desktop.getPrinterStatus(),
+        8000,
+        "Printer status",
+      );
       if (status.ok) {
-        setPrinterReady(Boolean(status.ready ?? status.saved));
+        setPrinterSaved(Boolean(status.saved));
         setPrinterConnected(Boolean(status.connected));
+        setPrinterReady(Boolean(status.ready ?? status.connected));
+        setPrinterStatusDetail(status.statusDetail ?? "");
       } else {
+        setPrinterSaved(false);
         setPrinterConnected(false);
         setPrinterReady(false);
+        setPrinterStatusDetail("");
       }
     } catch {
+      setPrinterSaved(false);
       setPrinterConnected(false);
       setPrinterReady(false);
+      setPrinterStatusDetail("");
     }
   }, [desktop]);
 
@@ -316,6 +377,17 @@ export function App() {
     void refreshSyncStatus();
   }, [session, refreshConnectivity, refreshSyncStatus]);
 
+  useEffect(() => {
+    setActiveCategory((prev) => {
+      const valid = new Set<string>([
+        CAT_OPEN,
+        CAT_COMBOS,
+        ...categories.map((c) => c.name),
+      ]);
+      return prev && valid.has(prev) ? prev : CAT_OPEN;
+    });
+  }, [categories, menuCombos.length]);
+
   const menuSearchNorm = menuQuery.trim().toLowerCase();
   const isMenuSearching = menuSearchNorm.length > 0;
 
@@ -340,14 +412,26 @@ export function App() {
           item.name.toLowerCase().includes(menuSearchNorm) ||
           item.category.toLowerCase().includes(menuSearchNorm),
       );
-      if (activeCategory !== CAT_OPEN) {
+      if (
+        activeCategory !== CAT_OPEN &&
+        activeCategory !== CAT_COMBOS
+      ) {
         items = items.filter((item) => item.category === activeCategory);
       }
       return items;
     }
-    if (activeCategory === CAT_OPEN) return [];
+    if (activeCategory === CAT_OPEN || activeCategory === CAT_COMBOS) return [];
     return items.filter((m) => m.category === activeCategory);
   }, [menuItems, menuSearchNorm, activeCategory]);
+
+  const filteredCombos = useMemo(() => {
+    return menuCombos.filter((c) => {
+      if (c.available === false) return false;
+      if (!isComboAvailable(c, menuItems)) return false;
+      if (menuSearchNorm && !c.name.toLowerCase().includes(menuSearchNorm)) return false;
+      return true;
+    });
+  }, [menuCombos, menuItems, menuSearchNorm]);
 
   const totals = useMemo(() => {
     const subtotal = cart.reduce((a, l) => a + l.qty * l.unitPriceCents, 0);
@@ -390,6 +474,7 @@ export function App() {
           );
         }
         const line: CartItemLine = {
+          kind: "item",
           lineId,
           itemId: item.id,
           name: item.name,
@@ -405,6 +490,41 @@ export function App() {
       setError("");
     },
     [],
+  );
+
+  const addComboLine = useCallback(
+    (combo: MenuCombo) => {
+      if (!isComboAvailable(combo, menuItems)) {
+        setError("This combo is unavailable.");
+        return;
+      }
+      const lineId = buildComboLineId(combo.id);
+      const componentSummary = formatComboComponentSummary(combo, menuItems);
+      const unitPriceCents = rupeesToCents(combo.price);
+      setCart((prev) => {
+        const existing = prev.find((l) => l.lineId === lineId);
+        if (existing && isCartComboLine(existing)) {
+          return prev.map((l) =>
+            l.lineId === lineId ? { ...l, qty: l.qty + 1 } : l,
+          );
+        }
+        const line: CartComboLine = {
+          kind: "combo",
+          lineId,
+          comboId: combo.id,
+          name: combo.name,
+          image: combo.image,
+          isVeg: combo.isVeg,
+          qty: 1,
+          unitPriceCents,
+          taxRateBps: 0,
+          componentSummary,
+        };
+        return [...prev, line];
+      });
+      setError("");
+    },
+    [menuItems],
   );
 
   const openConfigure = useCallback(
@@ -541,6 +661,14 @@ export function App() {
   ]);
 
   useEffect(() => {
+    if (!session || !desktop?.getPrinterStatus) return;
+    const id = setInterval(() => {
+      void refreshPrinterStatus();
+    }, 3000);
+    return () => clearInterval(id);
+  }, [session, desktop, refreshPrinterStatus]);
+
+  useEffect(() => {
     if (!posSettings?.paymentMethods.length) return;
     setPaymentMethodKey((k) =>
       k && posSettings.paymentMethods.some((p) => p.id === k)
@@ -645,7 +773,11 @@ export function App() {
         return;
       }
       if (printMode !== "none" && !printerReady) {
-        setError("Connect printer and save the same queue name you use in Petpooja.");
+        setError(
+          printerSaved
+            ? "Printer is disconnected. Reconnect USB/power, then wait for Printer connected in the header."
+            : "No printer connected. Plug in a printer and wait for Printer connected in the header.",
+        );
         setPrinterDialogOpen(true);
         return;
       }
@@ -804,6 +936,12 @@ export function App() {
   );
 
   const isSubmitting = submittingMode !== null;
+
+  const printerHeaderLabel = printerConnected
+    ? "Printer connected"
+    : printerSaved
+      ? "Printer disconnected"
+      : "No printer";
 
   if (!session) {
     const needsServer = !boot?.syncConfigured || showServerSetup;
@@ -978,14 +1116,17 @@ export function App() {
           <button
             type="button"
             onClick={() => setPrinterDialogOpen(true)}
+            title={printerStatusDetail || undefined}
             className={`inline-flex h-9 items-center gap-2 rounded-lg border px-3 text-sm ${
               printerConnected
                 ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                : ""
+                : printerSaved
+                  ? "border-amber-200 bg-amber-50 text-amber-800"
+                  : ""
             }`}
           >
             <PrinterIcon className="size-4" />
-            {printerConnected ? "Printer ready" : "Connect printer"}
+            {printerHeaderLabel}
           </button>
           <button
             type="button"
@@ -1092,8 +1233,8 @@ export function App() {
             <div className="rounded-xl border p-4 text-muted-foreground text-sm">
               <p className="font-medium text-foreground">Printer</p>
               <p className="mt-1 text-xs">
-                Use <strong>Connect printer</strong> in the header to choose a receipt printer for
-                silent KOT/Bill printing.
+                Use <strong>Printer</strong> in the header — any connected printer works for KOT and
+                bills.
               </p>
             </div>
           </div>
@@ -1105,7 +1246,7 @@ export function App() {
           sessionId={session.id}
           refreshKey={ordersRefreshKey}
           posSettings={posSettings}
-          printerConnected={printerReady}
+          printerConnected={printerConnected}
         />
       ) : mainTab === "reports" ? (
         <ReportsPanel refreshKey={ordersRefreshKey} />
@@ -1141,6 +1282,17 @@ export function App() {
               >
                 <PlusIcon className="size-4 shrink-0 opacity-80" />
                 <span className="min-w-0 flex-1">Open item</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveCategory(CAT_COMBOS)}
+                className={`rounded-md px-2.5 py-2 text-left text-sm leading-snug transition-colors ${
+                  activeCategory === CAT_COMBOS
+                    ? "bg-background font-medium text-foreground shadow-sm ring-1 ring-border/80"
+                    : "text-muted-foreground hover:bg-background/70 hover:text-foreground"
+                }`}
+              >
+                Combos
               </button>
               {filteredCategories.map((cat) => (
                 <button
@@ -1184,6 +1336,49 @@ export function App() {
                     <PlusIcon className="size-4" />
                     Add open item
                   </button>
+                </div>
+              ) : activeCategory === CAT_COMBOS ? (
+                <div className="p-3">
+                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                    {filteredCombos.map((combo) => (
+                      <button
+                        key={combo.id}
+                        type="button"
+                        onClick={() => addComboLine(combo)}
+                        disabled={busy}
+                        className="flex flex-col rounded-lg border bg-background p-3 text-left text-sm transition-colors hover:bg-muted/50 disabled:opacity-50"
+                      >
+                        <div className="flex gap-2">
+                          <div className="relative size-14 shrink-0 overflow-hidden rounded-md bg-muted">
+                            {combo.image ? (
+                              <img
+                                src={combo.image}
+                                alt=""
+                                loading="lazy"
+                                decoding="async"
+                                className="absolute inset-0 size-full object-cover"
+                              />
+                            ) : null}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="line-clamp-2 font-medium leading-tight">{combo.name}</p>
+                            <p className="mt-1 text-muted-foreground text-xs">
+                              {money(rupeesToCents(combo.price))}
+                            </p>
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                  {filteredCombos.length === 0 ? (
+                    <p className="mt-4 text-center text-muted-foreground text-sm">
+                      {menuCombos.length === 0
+                        ? "No combos in cache. Use Sync menu when online."
+                        : isMenuSearching
+                          ? "No combos match your search."
+                          : "No combos available right now."}
+                    </p>
+                  ) : null}
                 </div>
               ) : (
               <div className="p-3">
@@ -1370,7 +1565,12 @@ export function App() {
                     >
                       <div className="min-w-0 flex-1">
                         <div className="line-clamp-2 font-medium leading-snug">{cartLineTitle(l)}</div>
-                        {!isCartOpenLine(l) && l.addons.length > 0 ? (
+                        {isCartComboLine(l) && l.componentSummary ? (
+                          <div className="truncate text-muted-foreground text-xs">
+                            {l.componentSummary}
+                          </div>
+                        ) : null}
+                        {!isCartOpenLine(l) && !isCartComboLine(l) && l.addons.length > 0 ? (
                           <div className="truncate text-muted-foreground text-xs">
                             {l.addons.map((a) => `${a.quantity}× ${a.name}`).join(", ")}
                           </div>
@@ -1527,7 +1727,9 @@ export function App() {
                     onClick={() => setPrinterDialogOpen(true)}
                     className="text-left text-primary text-xs underline-offset-2 hover:underline"
                   >
-                    Connect printer to enable printing.
+                    {printerSaved
+                      ? "Printer disconnected — reconnect USB/power to enable printing."
+                      : "No printer connected — plug in a printer to enable printing."}
                   </button>
                 ) : null}
                 <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-3">

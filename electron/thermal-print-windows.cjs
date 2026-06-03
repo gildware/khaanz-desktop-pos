@@ -16,7 +16,20 @@ function windowsThermalPrintOptions(deviceName) {
   };
 }
 
+function darwinThermalPrintOptions(deviceName) {
+  return {
+    silent: true,
+    printBackground: true,
+    color: false,
+    deviceName,
+    margins: { marginType: "none" },
+  };
+}
+
 function defaultThermalPrintOptions(deviceName) {
+  if (process.platform === "darwin") {
+    return darwinThermalPrintOptions(deviceName);
+  }
   return {
     silent: true,
     printBackground: false,

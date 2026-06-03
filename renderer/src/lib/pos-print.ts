@@ -1,4 +1,4 @@
-import type { CartItemLine, CartLine } from "../types";
+import type { CartComboLine, CartItemLine, CartLine } from "../types";
 
 export type PosReceiptAddonRow = {
   name: string;
@@ -30,8 +30,25 @@ export function fulfillmentLabelFromKey(fulfillment: string): string {
   return fulfillment;
 }
 
+function isCartComboLine(line: CartLine): line is CartComboLine {
+  return line.kind === "combo";
+}
+
 export function cartLinesToReceiptRows(lines: CartLine[]): PosReceiptLine[] {
   return lines.map((line) => {
+    if (isCartComboLine(line)) {
+      const unit = line.unitPriceCents / 100;
+      const subtotal = unit * line.qty;
+      const detail = line.componentSummary.trim()
+        ? ` — ${line.componentSummary}`
+        : "";
+      return {
+        label: `${line.name} (Combo)${detail}`,
+        qty: line.qty,
+        unit,
+        subtotal,
+      };
+    }
     if (line.kind === "open") {
       const unit = line.unitPriceCents / 100;
       const subtotal = unit * line.qty;
@@ -445,12 +462,12 @@ type DesktopPrintBridge = {
 
 async function sendReceiptToDesktop(
   desktop: DesktopPrintBridge,
-  platform: string,
+  _platform: string,
   plainText: string,
   htmlDoc: string,
   title: string,
 ): Promise<void> {
-  if (platform === "win32" && desktop.printReceiptText) {
+  if (desktop.printReceiptText) {
     const r = await desktop.printReceiptText(plainText, title);
     if (r.ok) return;
     throw new Error(r.error || "Print failed");
@@ -467,7 +484,7 @@ export async function printPosBillThermal(
   if (!options.lines.length) {
     throw new Error("Nothing to print — cart is empty.");
   }
-  if (!desktop?.printSilentHtml) return;
+  if (!desktop?.printSilentHtml && !desktop?.printReceiptText) return;
 
   const platform = desktop.getPlatform ? await desktop.getPlatform() : "";
   const plain = usePlainTextReceipt(platform);
@@ -485,7 +502,7 @@ export async function printPosKotThermal(
   if (!options.lines.length) {
     throw new Error("Nothing to print — no KOT lines.");
   }
-  if (!desktop?.printSilentHtml) return;
+  if (!desktop?.printSilentHtml && !desktop?.printReceiptText) return;
 
   const platform = desktop.getPlatform ? await desktop.getPlatform() : "";
   const plain = usePlainTextReceipt(platform);
