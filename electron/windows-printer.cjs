@@ -17,6 +17,7 @@ const {
   isLikelyGdiReceiptDriver,
   isVirtualPort,
 } = require("./print-strategy-windows.cjs");
+const { appendPrintLog } = require("./print-log.cjs");
 
 const RAW_PRINTER_HELPER_CS = `
 using System;
@@ -304,15 +305,19 @@ function buildWindowsPrintAttempts(name, body, title, options = {}) {
   const useElectronPrint = Boolean(process.versions.electron) && !options.skipElectronPrint;
   const gdiReceipt = options.gdiReceipt !== false;
 
-  const attempts = [
-    { methodId: "notepad-pt", run: () => printViaNotepadPtWindows(name, body) },
-    { methodId: "shell-printto", run: () => printViaShellPrinttoWindows(name, body) },
+  // GDI driver print — the same path Petpooja-style POS apps use. `dotnet-gdi`
+  // (System.Drawing.Printing.PrintDocument) renders the text and submits a real
+  // spooler job; it throws if the driver/queue is invalid, so it is reliable and
+  // goes first. notepad /pt and ShellExecute "printto" are legacy fallbacks only:
+  // on Windows 11 `notepad /pt` no longer prints (it just opens the file), so they
+  // must never be trusted on exit code alone (see confirmPrintSucceeded).
+  const gdiAttempts = [
     { methodId: "dotnet-gdi", run: () => printGdiDotNetWindows(name, body) },
     { methodId: "cmd-print", run: () => printViaCmdPrint(name, body) },
   ];
 
   if (useElectronPrint) {
-    attempts.push(
+    gdiAttempts.push(
       {
         methodId: "gdi",
         run: () => require("./print-gdi-windows.cjs").printReceiptGdiWindows(name, body, safeTitle),
@@ -324,22 +329,51 @@ function buildWindowsPrintAttempts(name, body, title, options = {}) {
     );
   }
 
-  if (!gdiReceipt) {
-    attempts.push(
-      { methodId: "port-raw", run: () => printEscPosToPortWindows(name, body) },
-      { methodId: "text-raw", run: () => printTextRawWindows(name, body) },
-      { methodId: "escpos-raw", run: () => printEscPosRawWindows(name, body) },
-      { methodId: "out-printer", run: () => printPlainTextOutPrinter(name, body) },
-    );
-  }
+  gdiAttempts.push(
+    { methodId: "shell-printto", run: () => printViaShellPrinttoWindows(name, body) },
+    { methodId: "notepad-pt", run: () => printViaNotepadPtWindows(name, body) },
+  );
+
+  // RAW ESC/POS — for Generic/Text Only queues and true thermal hardware. Kept as a
+  // fallback for every printer (not only "raw" queues) so the bill still prints when
+  // the GDI driver path fails on the shop PC.
+  const rawAttempts = [
+    { methodId: "escpos-raw", run: () => printEscPosRawWindows(name, body) },
+    { methodId: "text-raw", run: () => printTextRawWindows(name, body) },
+    { methodId: "port-raw", run: () => printEscPosToPortWindows(name, body) },
+    { methodId: "out-printer", run: () => printPlainTextOutPrinter(name, body) },
+  ];
+
+  // Generic/Text-Only thermal queues print best with RAW first; everything else
+  // (real GDI drivers like BillQuick Lite) prints best with GDI first.
+  const attempts = gdiReceipt
+    ? [...gdiAttempts, ...rawAttempts]
+    : [...rawAttempts, ...gdiAttempts];
 
   return reorderAttempts(attempts, options.preferredMethod);
 }
 
+/**
+ * Legacy verbs that can return exit code 0 WITHOUT actually printing
+ * (notably `notepad /pt` on Windows 11, and ShellExecute "printto").
+ * Only these are gated behind a real spooler-job check.
+ */
+const SPOOLER_VERIFY_METHODS = new Set(["notepad-pt", "shell-printto"]);
+
 async function confirmPrintSucceeded(printerName, methodId, attemptResult) {
-  if (methodId === "notepad-pt" && attemptResult.ok) {
-    return { ok: true, proof: "notepad-exit" };
+  if (!attemptResult.ok) {
+    return { ok: false, error: attemptResult.error || "Print failed" };
   }
+
+  // Reliable submit APIs (GDI PrintDocument, WinSpool RAW/TEXT, direct port write,
+  // Out-Printer, Electron print, classic `print` command) throw when the spooler or
+  // driver rejects the job, so a non-error result is itself proof the job was sent.
+  // Polling the spooler afterwards is racy for these — thermal jobs often clear in
+  // under a second, which would cause a false "no job" and a duplicate reprint.
+  if (!SPOOLER_VERIFY_METHODS.has(methodId)) {
+    return { ok: true, proof: `${methodId}-submitted` };
+  }
+
   const spooler = await verifyWindowsSpoolerActivity(printerName, 8);
   if (spooler.ok) {
     return { ok: true, proof: spooler.detail || "spooler" };
@@ -388,26 +422,42 @@ async function printPlainTextWindows(deviceName, text, title, options = {}) {
   });
 
   const errors = [];
+  const tried = [];
   for (const attempt of attempts) {
     const r = await attempt.run();
     if (!r.ok) {
+      tried.push({ method: attempt.methodId, ok: false, error: r.error || "failed" });
       if (r.error) errors.push(`${attempt.methodId}: ${r.error}`);
       continue;
     }
 
     const confirmed = await confirmPrintSucceeded(name, attempt.methodId, r);
     if (confirmed.ok) {
-      return {
-        ok: true,
-        deviceName: name,
-        method: r.method || attempt.methodId,
+      const method = r.method || attempt.methodId;
+      tried.push({ method, ok: true, proof: confirmed.proof });
+      appendPrintLog({
+        event: "print-ok",
+        printer: name,
+        title: title || "Receipt",
+        gdiReceipt,
+        method,
         proof: confirmed.proof,
-      };
+        tried,
+      });
+      return { ok: true, deviceName: name, method, proof: confirmed.proof };
     }
+    tried.push({ method: attempt.methodId, ok: false, error: confirmed.error || "not confirmed" });
     errors.push(`${attempt.methodId}: ${confirmed.error || "not confirmed"}`);
   }
 
   const detail = errors.filter(Boolean).join(" | ");
+  appendPrintLog({
+    event: "print-failed",
+    printer: name,
+    title: title || "Receipt",
+    gdiReceipt,
+    tried,
+  });
   return {
     ok: false,
     error: detail

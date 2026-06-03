@@ -180,7 +180,9 @@ Options if you want Windows without sitting at the shop every time: a cheap Wind
 
 ### Windows thermal printers (BillQuick Lite, POS 203DPI, etc.)
 
-The app uses the **same GDI print path as Petpooja** (`notepad /pt` and related Windows APIs), not RAW ESC/POS. It only reports success when **Notepad exits OK** or the **Windows print spooler** shows a job on that queue. After the first successful test print, it **reuses that method** for bills and KOTs.
+The app uses the **same GDI print path as Petpooja**. The primary method is `System.Drawing.Printing.PrintDocument` (a real GDI spooler job through the printer driver); if that driver path fails it falls back to RAW ESC/POS (Generic/Text Only queues and direct USB/COM port writes), and only as a last resort to the legacy `notepad /pt` / ShellExecute `printto` verbs. Those legacy verbs are **never trusted on exit code alone** — on Windows 11 `notepad /pt` opens the file without printing — so they only count as success when the **Windows print spooler** shows a real job. After the first successful print, the app **reuses that method** for bills and KOTs.
+
+Every attempt is recorded to a log (`khaanz-print.log` in the app's logs folder, e.g. `%APPDATA%\khaanz-pos-desktop-offline\logs\` on Windows). If a print "succeeds" but no paper comes out, check that log to see which method was used.
 
 **Test printing before you build/install a release** (on the Windows PC with the printer USB-connected):
 

@@ -132,6 +132,12 @@ export function App() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(""), 3500);
+    return () => clearTimeout(t);
+  }, [notice]);
+
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [categories, setCategories] = useState<MenuCategory[]>([]);
   const [activeCategory, setActiveCategory] = useState(CAT_OPEN);
@@ -1013,14 +1019,26 @@ export function App() {
       ) : null}
 
       {notice ? (
-        <div className="border-b bg-emerald-500/10 px-4 py-2 text-emerald-900 text-sm">{notice}</div>
+        <div className="pointer-events-none fixed inset-x-0 top-4 z-50 flex justify-center px-4">
+          <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-50 px-4 py-2 text-emerald-900 text-sm shadow-lg dark:bg-emerald-950 dark:text-emerald-100">
+            <span>{notice}</span>
+            <button
+              type="button"
+              onClick={() => setNotice("")}
+              aria-label="Dismiss"
+              className="text-emerald-700/70 hover:text-emerald-900 dark:text-emerald-300/70 dark:hover:text-emerald-100"
+            >
+              ×
+            </button>
+          </div>
+        </div>
       ) : null}
 
-      <nav className="flex shrink-0 gap-1 border-b bg-muted/30 px-4 py-2">
+      <nav className="flex shrink-0 items-center gap-1 border-b bg-muted/30 px-4 py-2">
         <button
           type="button"
           onClick={() => setMainTab("pos")}
-          className={`rounded-md px-4 py-2 font-medium text-sm transition-colors ${
+          className={`inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-md px-4 font-medium text-sm transition-colors ${
             mainTab === "pos"
               ? "bg-background text-foreground shadow-sm ring-1 ring-border/80"
               : "text-muted-foreground hover:text-foreground"
@@ -1031,7 +1049,7 @@ export function App() {
         <button
           type="button"
           onClick={() => setMainTab("orders")}
-          className={`rounded-md px-4 py-2 font-medium text-sm transition-colors ${
+          className={`inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-md px-4 font-medium text-sm transition-colors ${
             mainTab === "orders"
               ? "bg-background text-foreground shadow-sm ring-1 ring-border/80"
               : "text-muted-foreground hover:text-foreground"
@@ -1042,7 +1060,7 @@ export function App() {
         <button
           type="button"
           onClick={() => setMainTab("reports")}
-          className={`rounded-md px-4 py-2 font-medium text-sm transition-colors ${
+          className={`inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-md px-4 font-medium text-sm transition-colors ${
             mainTab === "reports"
               ? "bg-background text-foreground shadow-sm ring-1 ring-border/80"
               : "text-muted-foreground hover:text-foreground"
@@ -1053,7 +1071,7 @@ export function App() {
         <button
           type="button"
           onClick={() => setMainTab("settings")}
-          className={`rounded-md px-4 py-2 font-medium text-sm transition-colors ${
+          className={`inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-md px-4 font-medium text-sm transition-colors ${
             mainTab === "settings"
               ? "bg-background text-foreground shadow-sm ring-1 ring-border/80"
               : "text-muted-foreground hover:text-foreground"
@@ -1370,6 +1388,9 @@ export function App() {
                         >
                           −
                         </button>
+                        <span className="w-6 text-center font-medium tabular-nums">
+                          {l.qty}
+                        </span>
                         <button
                           type="button"
                           onClick={() => bumpLineQty(l.lineId, 1)}
