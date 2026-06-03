@@ -1,14 +1,15 @@
 /**
- * Methods that work with BillQuick Lite / Petpooja-style GDI drivers (no Sumatra, no RAW).
- * `dotnet-gdi` (System.Drawing.Printing.PrintDocument) is the reliable primary; the
- * legacy verbs `shell-printto` and `notepad-pt` are last-resort only because they can
- * report success without printing (notably `notepad /pt` on Windows 11).
+ * Methods that work with BillQuick Lite / Petpooja-style GDI drivers, in order of
+ * reliability. `pdf` (SumatraPDF via pdf-to-printer) and `dotnet-gdi`
+ * (System.Drawing.Printing.PrintDocument) are the dependable primaries; the legacy verbs
+ * `shell-printto` and `notepad-pt` are last-resort only because they can report success
+ * without printing (notably `notepad /pt` on Windows 11).
  */
 const GDI_METHOD_ORDER = [
-  "dotnet-gdi",
-  "cmd-print",
-  "gdi",
   "pdf",
+  "dotnet-gdi",
+  "gdi",
+  "cmd-print",
   "shell-printto",
   "notepad-pt",
 ];

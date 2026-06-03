@@ -180,9 +180,20 @@ Options if you want Windows without sitting at the shop every time: a cheap Wind
 
 ### Windows thermal printers (BillQuick Lite, POS 203DPI, etc.)
 
-The app uses the **same GDI print path as Petpooja**. The primary method is `System.Drawing.Printing.PrintDocument` (a real GDI spooler job through the printer driver); if that driver path fails it falls back to RAW ESC/POS (Generic/Text Only queues and direct USB/COM port writes), and only as a last resort to the legacy `notepad /pt` / ShellExecute `printto` verbs. Those legacy verbs are **never trusted on exit code alone** — on Windows 11 `notepad /pt` opens the file without printing — so they only count as success when the **Windows print spooler** shows a real job. After the first successful print, the app **reuses that method** for bills and KOTs.
+The app prints **silently through the printer driver, the same way Petpooja does**, trying methods in order of reliability:
 
-Every attempt is recorded to a log (`khaanz-print.log` in the app's logs folder, e.g. `%APPDATA%\khaanz-pos-desktop-offline\logs\` on Windows). If a print "succeeds" but no paper comes out, check that log to see which method was used.
+1. **`pdf`** — renders the receipt to a single content-height PDF and prints it silently with **SumatraPDF** (bundled via `pdf-to-printer`). Most reliable across GDI thermal drivers (BillQuick Lite, POS 203DPI, Epson TM…). SumatraPDF returns a non‑zero exit code on failure, so success is honest (no false "printed").
+2. **`dotnet-gdi`** — `System.Drawing.Printing.PrintDocument`; renders the text and submits a real spooler job.
+3. **`gdi`** — Electron `webContents.print` (silent) through the driver.
+4. **`cmd-print`** — legacy `print /D:`.
+5. **RAW ESC/POS** — Generic/Text Only queues and direct USB/COM/network port writes (true thermal hardware).
+6. **`shell-printto` / `notepad-pt`** — last resort only. On Windows 11 `notepad /pt` opens the file **without printing**, so these are **never trusted on exit code** — they only count as success when the **Windows print spooler** shows a real job.
+
+After the first successful print, the app **reuses that method** for bills and KOTs.
+
+> Packaged-app note: `SumatraPDF.exe` must be unpacked from the asar (handled by `asarUnpack: ["**/node_modules/pdf-to-printer/**"]`) and the code passes an explicit `sumatraPdfPath` — without this the `pdf` method fails with `ENOENT` in the installed app.
+
+**Diagnostic log:** every attempt is appended to `khaanz-print.log` in the app's logs folder — on Windows `%APPDATA%\khaanz-pos-desktop-offline\logs\khaanz-print.log` (open `%APPDATA%\khaanz-pos-desktop-offline\logs` in Explorer). If a print "succeeds" but no paper comes out, send that file — it shows exactly which method ran and any error.
 
 **Test printing before you build/install a release** (on the Windows PC with the printer USB-connected):
 

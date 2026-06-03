@@ -305,31 +305,31 @@ function buildWindowsPrintAttempts(name, body, title, options = {}) {
   const useElectronPrint = Boolean(process.versions.electron) && !options.skipElectronPrint;
   const gdiReceipt = options.gdiReceipt !== false;
 
-  // GDI driver print — the same path Petpooja-style POS apps use. `dotnet-gdi`
-  // (System.Drawing.Printing.PrintDocument) renders the text and submits a real
-  // spooler job; it throws if the driver/queue is invalid, so it is reliable and
-  // goes first. notepad /pt and ShellExecute "printto" are legacy fallbacks only:
-  // on Windows 11 `notepad /pt` no longer prints (it just opens the file), so they
-  // must never be trusted on exit code alone (see confirmPrintSucceeded).
-  const gdiAttempts = [
-    { methodId: "dotnet-gdi", run: () => printGdiDotNetWindows(name, body) },
-    { methodId: "cmd-print", run: () => printViaCmdPrint(name, body) },
-  ];
-
+  // GDI driver print — the same silent path Petpooja-style POS apps use, in order of
+  // reliability:
+  //  1. pdf       — render → content-height PDF → SumatraPDF silent print (most reliable
+  //                 across GDI thermal drivers; throws on failure so success is honest).
+  //  2. dotnet-gdi— System.Drawing.Printing.PrintDocument; renders text, real spool job.
+  //  3. gdi       — Electron webContents.print (silent) through the driver.
+  //  4. cmd-print — legacy `print /D:` of a text file.
+  //  5/6 shell-printto / notepad-pt — last resort. On Windows 11 `notepad /pt` no longer
+  //                 prints, so these are never trusted on exit code (see confirmPrintSucceeded).
+  const gdiAttempts = [];
   if (useElectronPrint) {
-    gdiAttempts.push(
-      {
-        methodId: "gdi",
-        run: () => require("./print-gdi-windows.cjs").printReceiptGdiWindows(name, body, safeTitle),
-      },
-      {
-        methodId: "pdf",
-        run: () => require("./print-pdf-windows.cjs").printReceiptPdfWindows(name, body, safeTitle),
-      },
-    );
+    gdiAttempts.push({
+      methodId: "pdf",
+      run: () => require("./print-pdf-windows.cjs").printReceiptPdfWindows(name, body, safeTitle),
+    });
   }
-
+  gdiAttempts.push({ methodId: "dotnet-gdi", run: () => printGdiDotNetWindows(name, body) });
+  if (useElectronPrint) {
+    gdiAttempts.push({
+      methodId: "gdi",
+      run: () => require("./print-gdi-windows.cjs").printReceiptGdiWindows(name, body, safeTitle),
+    });
+  }
   gdiAttempts.push(
+    { methodId: "cmd-print", run: () => printViaCmdPrint(name, body) },
     { methodId: "shell-printto", run: () => printViaShellPrinttoWindows(name, body) },
     { methodId: "notepad-pt", run: () => printViaNotepadPtWindows(name, body) },
   );
