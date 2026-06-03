@@ -1,3 +1,4 @@
+import type { BillPrintLayout } from "./bill-preview-settings";
 import type { CartComboLine, CartItemLine, CartLine } from "../types";
 
 export type PosReceiptAddonRow = {
@@ -162,48 +163,162 @@ export function receiptLineToKotLine(r: PosReceiptLine) {
   return { label: r.label, qty: r.qty, addonRows: r.addonRows };
 }
 
-/** Body fragment styles (full document + bold rules applied in Electron print wrapper). */
-const THERMAL_STYLE = `
+/** Scoped to `.thermal-receipt-root` so receipt CSS never affects the POS app shell. */
+function buildThermalStyle(layout?: BillPrintLayout): string {
+  const family = layout?.fontFamilyCss ?? 'Arial, Helvetica, "Liberation Sans", sans-serif';
+  const weight = layout?.fontWeightCss ?? "700";
+  const weightNum = layout?.fontWeightNum ?? 700;
+  const logoW = layout?.logoMaxWidthMm ?? 72;
+  const logoH = layout?.logoMaxHeightMm ?? 45;
+  const shopSize = layout?.shopNameSizePx ?? 15;
+  const grandSize = layout?.grandTotalSizePx ?? 18;
+  const bodySize = layout?.bodySizePx ?? 12;
+  const lineHeight = layout?.lineHeight ?? 1.4;
+  const pad = layout?.receiptPaddingPx ?? 8;
+  const align = layout?.headerAlign ?? "center";
+  const r = ".thermal-receipt-root";
+  return `
   @page { size: 80mm auto; margin: 3mm; }
-  html {
-    color-scheme: light only;
-    background: #fff !important;
-  }
-  * {
+  html { color-scheme: light only; }
+  body.thermal-print-body { margin: 0; padding: 0; background: #fff; }
+  ${r} {
     box-sizing: border-box;
-    font-weight: 700 !important;
-    color: #000 !important;
+    font-family: ${family};
+    font-size: ${bodySize}px;
+    font-weight: ${weight};
+    line-height: ${lineHeight};
+    margin: 0;
+    padding: ${pad}px;
+    max-width: 72mm;
+    background: #fff;
+    color: #000;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
-  html, body {
-    font-family: Arial, Helvetica, "Liberation Sans", sans-serif;
-    font-size: 12px;
-    font-weight: 700;
-    line-height: 1.45;
-    margin: 0;
-    padding: 8px;
-    max-width: 72mm;
-    background: #fff !important;
-    color: #000 !important;
+  ${r} * {
+    box-sizing: border-box;
+    color: #000;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
-  h1 { font-size: 16px; margin: 0 0 8px; font-weight: 700; text-align: center; }
-  .pre { white-space: pre-wrap; font-size: 11px; margin: 4px 0; font-weight: 700; }
-  .muted { font-size: 11px; margin: 3px 0; font-weight: 700; }
-  table { width: 100%; border-collapse: collapse; margin: 8px 0; }
-  th, td { padding: 3px 0; text-align: left; vertical-align: top; font-size: 11px; font-weight: 700; }
-  th { border-bottom: 2px solid #000; font-weight: 700; }
-  .right { text-align: right; white-space: nowrap; }
-  .sep { border-top: 2px solid #000; margin: 8px 0; padding-top: 6px; font-weight: 700; }
-  .total { font-weight: 700; font-size: 14px; }
-  tr.addon-line td { font-size: 10px; line-height: 1.3; font-weight: 700; }
-  tr.addon-line .iname { padding-left: 8px; }
+  ${r} .bill-receipt { width: 100%; }
+  ${r} .logo-wrap { text-align: center; margin: 0 auto 4px; width: 100%; }
+  ${r} .logo-wrap img.logo {
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+    max-width: ${logoW}mm;
+    max-height: ${logoH}mm;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    object-position: center center;
+    filter: grayscale(100%) contrast(1.12);
+  }
+  ${r} img { filter: grayscale(100%) contrast(1.08); }
+  ${r} h1.shop-name { font-size: ${shopSize}px; margin: 0 0 4px; font-weight: ${weightNum + 100}; text-align: ${align}; }
+  ${r} .rest-address { text-align: ${align}; font-size: 10px; margin: 0 0 4px; line-height: 1.35; white-space: pre-wrap; }
+  ${r} .contact { text-align: ${align}; font-size: 11px; margin: 0 0 6px; line-height: 1.35; }
+  ${r} .rule { border: none; border-top: 1px solid #000; margin: 6px 0; }
+  ${r} .rule.rule-double { border-top: 3px double #000; }
+  ${r} .rule.rule-dashed { border-top: 1px dashed #000; }
+  ${r} .cust { font-size: 11px; margin: 2px 0; }
+  ${r} .meta-row { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; font-size: 11px; margin: 2px 0; }
+  ${r} .meta-row .fulfill { font-weight: ${weightNum + 100}; font-size: 12px; }
+  ${r} .time-line { font-size: 11px; margin: 0 0 4px; }
+  ${r} .pre { white-space: pre-wrap; font-size: 11px; margin: 4px 0; text-align: center; }
+  ${r} .muted { font-size: 11px; margin: 3px 0; }
+  ${r} table { width: 100%; border-collapse: collapse; margin: 6px 0; }
+  ${r} th, ${r} td { padding: 2px 0; text-align: left; vertical-align: top; font-size: 11px; }
+  ${r} th { border-bottom: 1px solid #000; font-weight: ${weightNum}; }
+  ${r} .right { text-align: right; white-space: nowrap; }
+  ${r} .totals-row { display: flex; justify-content: space-between; font-size: 11px; margin: 4px 0; }
+  ${r} .grand-total { display: flex; justify-content: space-between; align-items: baseline; font-size: ${grandSize}px; font-weight: ${weightNum + 100}; margin: 8px 0 4px; }
+  ${r} .payment-status { font-size: 11px; margin: 4px 0; }
+  ${r} .thank-you { text-align: center; font-size: 11px; margin-top: 8px; }
+  ${r} tr.addon-line td { font-size: 10px; line-height: 1.3; }
+  ${r} tr.addon-line .iname { padding-left: 8px; }
+  ${r} h1 { font-size: 16px; margin: 0 0 8px; text-align: center; }
+  ${r} .sep { border-top: 2px solid #000; margin: 8px 0; padding-top: 6px; }
+  ${r} .total { font-size: 14px; font-weight: ${weightNum + 100}; }
 `;
+}
 
-export function wrapThermalPrintDocument(bodyHtml: string, title: string): string {
+function ordinalDay(n: number): string {
+  const mod100 = n % 100;
+  if (mod100 >= 11 && mod100 <= 13) return `${n}th`;
+  switch (n % 10) {
+    case 1:
+      return `${n}st`;
+    case 2:
+      return `${n}nd`;
+    case 3:
+      return `${n}rd`;
+    default:
+      return `${n}th`;
+  }
+}
+
+/** e.g. 3rd June 2026 11:20 pm */
+export function formatBillDateTime(d: Date): string {
+  const day = ordinalDay(d.getDate());
+  const month = d.toLocaleString("en-GB", { month: "long" });
+  const year = d.getFullYear();
+  const time = d
+    .toLocaleTimeString("en-GB", { hour: "numeric", minute: "2-digit", hour12: true })
+    .toLowerCase()
+    .replace(/\s/g, " ");
+  return `${day} ${month} ${year} ${time}`;
+}
+
+/** Fixed sample timestamp for Settings bill previews. */
+export const BILL_PREVIEW_SAMPLE_AT = new Date(2026, 5, 3, 23, 20);
+
+function extractBillNumber(orderRef: string | null): string {
+  if (!orderRef) return "—";
+  const m = orderRef.match(/(\d+)\s*$/);
+  return m ? m[1]! : orderRef;
+}
+
+function formatOrderIdForBill(orderRef: string | null, layout?: BillPrintLayout): string {
+  if (!orderRef) return "—";
+  if (layout?.orderIdFormat === "full") return orderRef;
+  return extractBillNumber(orderRef);
+}
+
+function thermalRuleClass(layout?: BillPrintLayout): string {
+  const style = layout?.ruleStyle ?? "single";
+  if (style === "double") return "rule rule-double";
+  if (style === "dashed") return "rule rule-dashed";
+  return "rule";
+}
+
+function parseCustomerAddress(footerNote?: string, notes?: string): string {
+  const fromFooter = (footerNote ?? "")
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => /^address:\s*/i.test(l));
+  if (fromFooter) return fromFooter.replace(/^address:\s*/i, "").trim();
+  return "";
+}
+
+function customerMobileForBill(phoneDigits: string): string {
+  if (!phoneDigits || phoneDigits === "0000000000" || phoneDigits === "6000000000") return "";
+  const d = phoneDigits.replace(/\D/g, "");
+  return d.length >= 10 ? d.slice(-10) : d;
+}
+
+export function wrapThermalPrintDocument(
+  bodyHtml: string,
+  title: string,
+  layout?: BillPrintLayout,
+): string {
   const safeTitle = escapeHtml(title || "Receipt");
-  const body = bodyHtml.replace(/<style>[\s\S]*?<\/style>/gi, "");
-  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><meta name="color-scheme" content="light only"/><title>${safeTitle}</title><style>${THERMAL_STYLE}</style></head><body>${body}</body></html>`;
+  const inner = bodyHtml.replace(/<style>[\s\S]*?<\/style>/gi, "").trim();
+  const body = inner.includes("thermal-receipt-root")
+    ? inner
+    : `<div class="thermal-receipt-root">${inner}</div>`;
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><meta name="color-scheme" content="light only"/><title>${safeTitle}</title><style>${buildThermalStyle(layout)}</style></head><body class="thermal-print-body">${body}</body></html>`;
 }
 
 export type PosBillPrintOptions = {
@@ -218,6 +333,7 @@ export type PosBillPrintOptions = {
   phoneDigits: string;
   notes: string;
   footerNote?: string;
+  customerAddress?: string;
   paymentLabel: string;
   lines: PosReceiptLine[];
   total: number;
@@ -227,6 +343,9 @@ export type PosBillPrintOptions = {
   deliveryCharge?: number;
   /** Discount in rupees. */
   discount?: number;
+  /** Override print timestamp (Settings preview). */
+  printedAt?: Date;
+  layout?: BillPrintLayout;
 };
 
 export type PosKotPrintOptions = {
@@ -237,6 +356,7 @@ export type PosKotPrintOptions = {
   dineInTable?: string;
   notes: string;
   lines: { label: string; qty: number; addonRows?: PosReceiptAddonRow[] }[];
+  layout?: BillPrintLayout;
 };
 
 function splitLines(text: string): string[] {
@@ -264,6 +384,13 @@ function plainRule(width = PLAIN_WIDTH): string {
   return "-".repeat(width);
 }
 
+function plainRuleForLayout(layout?: BillPrintLayout, width = PLAIN_WIDTH): string {
+  const style = layout?.ruleStyle ?? "single";
+  if (style === "double") return "=".repeat(width);
+  if (style === "dashed") return "- - ".repeat(Math.ceil(width / 3)).slice(0, width);
+  return plainRule(width);
+}
+
 export function usePlainTextReceipt(platform?: string): boolean {
   return platform === "win32";
 }
@@ -277,52 +404,104 @@ export function wrapPlainTextPrintDocument(text: string, title: string): string 
 </style></head><body><pre>${body}</pre></body></html>`;
 }
 
+function billDisplayName(o: PosBillPrintOptions): string {
+  return o.layout?.restaurantDisplayName?.trim() || o.restaurantName.trim() || "Khaanz";
+}
+
 export function buildBillPlainText(o: PosBillPrintOptions): string {
   const lines: string[] = [];
-  lines.push(centerPlain(o.restaurantName));
-  for (const h of splitLines(o.billHeader)) lines.push(centerPlain(h));
-  lines.push(plainRule());
-  const headerLine = o.proforma
-    ? `PROFORMA · ${o.fulfillmentLabel}`
-    : `${o.orderRef ?? "Order"} · ${o.fulfillmentLabel}`;
-  lines.push(headerLine.slice(0, PLAIN_WIDTH));
-  lines.push(new Date().toLocaleString("en-IN").slice(0, PLAIN_WIDTH));
-  if (o.dineInTable?.trim()) lines.push(`Table: ${o.dineInTable.trim()}`.slice(0, PLAIN_WIDTH));
-  const customer =
-    !o.phoneDigits || o.phoneDigits === "0000000000"
-      ? o.customerName
-      : `${o.customerName} · +91 ${o.phoneDigits}`;
-  lines.push(customer.slice(0, PLAIN_WIDTH));
-  if (o.footerNote?.trim()) lines.push(o.footerNote.trim().slice(0, PLAIN_WIDTH));
-  if (o.notes.trim()) lines.push(`Note: ${o.notes.trim()}`.slice(0, PLAIN_WIDTH));
-  lines.push(plainRule());
-  lines.push(padPlain("Item", "Qty  Amt"));
-  for (const r of o.lines) {
-    lines.push(
-      padPlain(r.label, `${r.qty}  ₹${Math.round(r.subtotal)}`.slice(0, 16)),
-    );
-    for (const a of r.addonRows ?? []) {
+  const now = o.printedAt ?? new Date();
+  const layout = o.layout;
+  const restPhone = layout?.restaurantPhone?.trim() ?? "";
+  const rule = () => plainRuleForLayout(layout);
+
+  if (layout?.showRestaurantName !== false) {
+    lines.push(centerPlain(billDisplayName(o)));
+  }
+  const restAddr = layout?.restaurantAddress?.trim() ?? "";
+  if (layout?.showAddress !== false && restAddr) {
+    for (const line of splitLines(restAddr)) {
       lines.push(
-        padPlain(`+ ${a.name}`, `${a.qty}  ₹${Math.round(a.subtotal)}`.slice(0, 16)),
+        (layout?.headerAlign === "left" ? line : centerPlain(line)).slice(0, PLAIN_WIDTH),
       );
     }
   }
-  lines.push(plainRule());
-  const itemsSub =
-    o.itemsSubtotal ?? o.lines.reduce((s, r) => s + r.subtotal, 0);
-  if (itemsSub > 0 && (o.deliveryCharge || o.discount)) {
-    lines.push(padPlain("Subtotal", `₹${Math.round(itemsSub)}`));
+  if (layout?.showPhone !== false && restPhone) {
+    lines.push(
+      (layout?.headerAlign === "left"
+        ? `${layout?.contactLabel ?? "Tel:"} ${restPhone}`
+        : centerPlain(`${layout?.contactLabel ?? "Tel:"} ${restPhone}`)
+      ).slice(0, PLAIN_WIDTH),
+    );
   }
+  for (const h of splitLines(o.billHeader)) lines.push(centerPlain(h));
+  lines.push(rule());
+
+  const mobile = customerMobileForBill(o.phoneDigits);
+  const nameLine = mobile
+    ? `Name: (M: ${mobile})`
+    : `Name: ${o.customerName}`;
+  lines.push(nameLine.slice(0, PLAIN_WIDTH));
+  const addr =
+    (o.customerAddress ?? "").trim() || parseCustomerAddress(o.footerNote, o.notes);
+  if (addr) lines.push(`Adr: ${addr}`.slice(0, PLAIN_WIDTH));
+  if (o.dineInTable?.trim()) lines.push(`Table: ${o.dineInTable.trim()}`.slice(0, PLAIN_WIDTH));
+  lines.push(rule());
+
+  const orderId = formatOrderIdForBill(o.orderRef, layout);
+  if (layout?.showOrderId !== false) {
+    lines.push(
+      padPlain(
+        o.fulfillmentLabel,
+        `${layout?.orderIdLabel ?? "Bill No."}: ${orderId}`,
+      ),
+    );
+  } else {
+    lines.push(o.fulfillmentLabel.slice(0, PLAIN_WIDTH));
+  }
+  lines.push(formatBillDateTime(now).slice(0, PLAIN_WIDTH));
+  if (o.proforma) lines.push("PROFORMA".slice(0, PLAIN_WIDTH));
+  lines.push(rule());
+
+  lines.push(padPlain("Item", "Qty. Price Amt"));
+  for (const r of o.lines) {
+    lines.push(r.label.slice(0, PLAIN_WIDTH));
+    lines.push(
+      padPlain(
+        "",
+        `${r.qty}  ${r.unit.toFixed(2)}  ${r.subtotal.toFixed(2)}`,
+      ),
+    );
+    for (const a of r.addonRows ?? []) {
+      lines.push(`+ ${a.name}`.slice(0, PLAIN_WIDTH));
+      lines.push(
+        padPlain("", `${a.qty}  ${a.unit.toFixed(2)}  ${a.subtotal.toFixed(2)}`),
+      );
+    }
+  }
+  lines.push(rule());
+
+  const totalQty = o.lines.reduce((s, r) => s + r.qty, 0);
+  const itemsSub = o.itemsSubtotal ?? o.lines.reduce((s, r) => s + r.subtotal, 0);
+  lines.push(padPlain(`Total Qty: ${totalQty}`, `Sub Total ${itemsSub.toFixed(2)}`));
   if (o.deliveryCharge && o.deliveryCharge > 0) {
-    lines.push(padPlain("Delivery", `₹${Math.round(o.deliveryCharge)}`));
+    lines.push(padPlain("Delivery", o.deliveryCharge.toFixed(2)));
   }
   if (o.discount && o.discount > 0) {
-    lines.push(padPlain("Discount", `-₹${Math.round(o.discount)}`));
+    lines.push(padPlain("Discount", `-${o.discount.toFixed(2)}`));
   }
-  lines.push(padPlain("TOTAL", `₹${Math.round(o.total)}`));
-  if (o.paymentLabel) lines.push(`Payment: ${o.paymentLabel}`.slice(0, PLAIN_WIDTH));
+  lines.push(rule());
+  lines.push(padPlain("Grand Total", `₹${o.total.toFixed(2)}`));
+  const payStatus = o.paymentLabel?.trim()
+    ? o.paymentLabel.trim()
+    : (layout?.unpaidLabel ?? "Not Paid");
+  lines.push(payStatus.slice(0, PLAIN_WIDTH));
   for (const f of splitLines(o.billFooter)) lines.push(f.slice(0, PLAIN_WIDTH));
-  lines.push(centerPlain("Thank you"));
+  if (layout?.showFooterNotes !== false) {
+    for (const f of splitLines(layout?.footerNotes ?? "")) lines.push(f.slice(0, PLAIN_WIDTH));
+  }
+  if (o.notes.trim()) lines.push(`Note: ${o.notes.trim()}`.slice(0, PLAIN_WIDTH));
+  lines.push(centerPlain(layout?.thankYouMessage ?? "Thank you — visit again!"));
   lines.push("");
   return lines.join("\n");
 }
@@ -336,7 +515,7 @@ export function buildKotPlainText(o: PosKotPrintOptions): string {
   lines.push(o.orderRef.slice(0, PLAIN_WIDTH));
   lines.push(o.fulfillmentLabel.slice(0, PLAIN_WIDTH));
   if (o.dineInTable?.trim()) lines.push(`Table: ${o.dineInTable.trim()}`.slice(0, PLAIN_WIDTH));
-  lines.push(new Date().toLocaleString("en-IN").slice(0, PLAIN_WIDTH));
+  lines.push(formatBillDateTime(new Date()).slice(0, PLAIN_WIDTH));
   if (o.notes.trim()) lines.push(`Note: ${o.notes.trim()}`.slice(0, PLAIN_WIDTH));
   lines.push(plainRule());
   lines.push(padPlain("Item", "Qty"));
@@ -351,77 +530,130 @@ export function buildKotPlainText(o: PosKotPrintOptions): string {
 }
 
 export function buildBillHtmlBody(o: PosBillPrintOptions): string {
+  const layout = o.layout;
+  const style = buildThermalStyle(layout);
   const headerLines = splitLines(o.billHeader);
   const footerLines = splitLines(o.billFooter);
+  const now = o.printedAt ?? new Date();
   const rows = o.lines
     .flatMap((r) => {
-      const main = `<tr><td>${escapeHtml(r.label)}</td><td class="right">${r.qty}</td><td class="right">₹${Math.round(
-        r.unit,
-      )}</td><td class="right">₹${Math.round(r.subtotal)}</td></tr>`;
+      const main = `<tr><td>${escapeHtml(r.label)}</td><td class="right">${r.qty}</td><td class="right">${r.unit.toFixed(
+        2,
+      )}</td><td class="right">${r.subtotal.toFixed(2)}</td></tr>`;
       const subs = (r.addonRows ?? []).map(
         (a) =>
-          `<tr class="addon-line"><td class="iname">+ ${escapeHtml(a.name)}</td><td class="right">${a.qty}</td><td class="right">₹${Math.round(
-            a.unit,
-          )}</td><td class="right">₹${Math.round(a.subtotal)}</td></tr>`,
+          `<tr class="addon-line"><td class="iname">+ ${escapeHtml(a.name)}</td><td class="right">${a.qty}</td><td class="right">${a.unit.toFixed(
+            2,
+          )}</td><td class="right">${a.subtotal.toFixed(2)}</td></tr>`,
       );
       return [main, ...subs];
     })
     .join("");
 
-  const headerLine = o.proforma
-    ? `PROFORMA · ${o.fulfillmentLabel}`
-    : `${o.orderRef ?? "Order"} · ${o.fulfillmentLabel}`;
-
+  const mobile = customerMobileForBill(o.phoneDigits);
+  const nameLine = mobile
+    ? `Name: (M: ${mobile})`
+    : `Name: ${o.customerName}`;
+  const addr =
+    (o.customerAddress ?? "").trim() || parseCustomerAddress(o.footerNote, o.notes);
+  const addrLine = addr ? `<div class="cust">Adr: ${escapeHtml(addr)}</div>` : "";
   const tableLine = o.dineInTable?.trim()
-    ? `<div class="muted">Table: ${escapeHtml(o.dineInTable.trim())}</div>`
+    ? `<div class="cust">Table: ${escapeHtml(o.dineInTable.trim())}</div>`
     : "";
-
-  const customerLine =
-    !o.phoneDigits || o.phoneDigits === "0000000000"
-      ? escapeHtml(o.customerName)
-      : `${escapeHtml(o.customerName)} · +91 ${escapeHtml(o.phoneDigits)}`;
 
   const headerHtml = headerLines.map((l) => `<div class="pre">${escapeHtml(l)}</div>`).join("");
   const footerHtml = footerLines.map((l) => `<div class="pre">${escapeHtml(l)}</div>`).join("");
+  const customFooterHtml =
+    layout?.showFooterNotes !== false
+      ? splitLines(layout?.footerNotes ?? "")
+          .map((l) => `<div class="pre">${escapeHtml(l)}</div>`)
+          .join("")
+      : "";
 
-  return `
-<style>${THERMAL_STYLE}</style>
-<h1>${escapeHtml(o.restaurantName)}</h1>
-${headerHtml}
-<div class="muted">${escapeHtml(headerLine)}</div>
-<div class="muted">${escapeHtml(new Date().toLocaleString("en-IN"))}</div>
-${tableLine}
-<div class="muted">${customerLine}</div>
-${o.footerNote?.trim() ? `<div class="muted">${escapeHtml(o.footerNote.trim())}</div>` : ""}
-${o.notes.trim() ? `<div class="muted">Note: ${escapeHtml(o.notes.trim())}</div>` : ""}
-<table>
-<thead><tr><th>Item</th><th class="right">Qty</th><th class="right">₹</th><th class="right">₹</th></tr></thead>
-<tbody>${rows}</tbody>
-</table>
-${(() => {
-  const itemsSub =
-    o.itemsSubtotal ??
-    o.lines.reduce((s, r) => s + r.subtotal, 0);
-  const parts: string[] = [];
-  if (itemsSub > 0 && (o.deliveryCharge || o.discount)) {
-    parts.push(`<div class="muted">Subtotal: ₹${Math.round(itemsSub)}</div>`);
-  }
+  const logoSrc = layout?.logoSrc?.trim() ?? "";
+  const logoHtml =
+    layout?.showLogo !== false && logoSrc
+      ? `<div class="logo-wrap"><img class="logo" src="${escapeHtml(logoSrc)}" alt="" /></div>`
+      : "";
+
+  const restPhone = layout?.restaurantPhone?.trim() ?? "";
+  const restAddr = layout?.restaurantAddress?.trim() ?? "";
+  const addressHtml =
+    layout?.showAddress !== false && restAddr
+      ? `<div class="rest-address">${escapeHtml(restAddr)}</div>`
+      : "";
+  const contactHtml =
+    layout?.showPhone !== false && restPhone
+      ? `<div class="contact">${escapeHtml(layout?.contactLabel ?? "Tel:")} ${escapeHtml(restPhone)}</div>`
+      : "";
+  const nameHtml =
+    layout?.showRestaurantName !== false
+      ? `<h1 class="shop-name">${escapeHtml(billDisplayName(o))}</h1>`
+      : "";
+
+  const itemsSub = o.itemsSubtotal ?? o.lines.reduce((s, r) => s + r.subtotal, 0);
+  const totalQty = o.lines.reduce((s, r) => s + r.qty, 0);
+  const extraTotals: string[] = [];
   if (o.deliveryCharge && o.deliveryCharge > 0) {
-    parts.push(`<div class="muted">Delivery: ₹${Math.round(o.deliveryCharge)}</div>`);
+    extraTotals.push(
+      `<div class="totals-row"><span>Delivery</span><span>${o.deliveryCharge.toFixed(2)}</span></div>`,
+    );
   }
   if (o.discount && o.discount > 0) {
-    parts.push(`<div class="muted">Discount: -₹${Math.round(o.discount)}</div>`);
+    extraTotals.push(
+      `<div class="totals-row"><span>Discount</span><span>-${o.discount.toFixed(2)}</span></div>`,
+    );
   }
-  return parts.join("");
-})()}
-<div class="sep total">Total: ₹${Math.round(o.total)}</div>
-${o.paymentLabel ? `<div class="muted">Payment: ${escapeHtml(o.paymentLabel)}</div>` : ""}
+
+  const payStatus = o.paymentLabel?.trim()
+    ? o.paymentLabel.trim()
+    : (layout?.unpaidLabel ?? "Not Paid");
+  const orderId = formatOrderIdForBill(o.orderRef, layout);
+  const proformaLine = o.proforma ? `<div class="cust">PROFORMA</div>` : "";
+  const rule = thermalRuleClass(layout);
+  const themeClass = layout?.themeClass ?? "bill-theme-classic";
+  const metaOrderHtml =
+    layout?.showOrderId !== false
+      ? `<div class="meta-row"><span class="fulfill">${escapeHtml(o.fulfillmentLabel)}</span><span>${escapeHtml(layout?.orderIdLabel ?? "Bill No.")}: ${escapeHtml(orderId)}</span></div>`
+      : `<div class="meta-row"><span class="fulfill">${escapeHtml(o.fulfillmentLabel)}</span></div>`;
+
+  return `
+<style>${style}</style>
+<div class="bill-receipt ${themeClass}">
+${logoHtml}
+${nameHtml}
+${addressHtml}
+${contactHtml}
+${headerHtml}
+<hr class="${rule}"/>
+<div class="cust">${escapeHtml(nameLine)}</div>
+${addrLine}
+${tableLine}
+<hr class="${rule}"/>
+${metaOrderHtml}
+<div class="time-line">${escapeHtml(formatBillDateTime(now))}</div>
+${proformaLine}
+<hr class="${rule}"/>
+<table>
+<thead><tr><th>Item</th><th class="right">Qty.</th><th class="right">Price</th><th class="right">Amount</th></tr></thead>
+<tbody>${rows}</tbody>
+</table>
+<hr class="${rule}"/>
+<div class="totals-row"><span>Total Qty: ${totalQty}</span><span>Sub Total ${itemsSub.toFixed(2)}</span></div>
+${extraTotals.join("")}
+<hr class="${rule}"/>
+<div class="grand-total"><span>Grand Total</span><span>₹${o.total.toFixed(2)}</span></div>
+<div class="payment-status">${escapeHtml(payStatus)}</div>
 ${footerHtml}
-<div class="muted" style="margin-top:8px;text-align:center">Thank you</div>
+${customFooterHtml}
+${o.notes.trim() ? `<div class="muted">Note: ${escapeHtml(o.notes.trim())}</div>` : ""}
+<div class="thank-you">${escapeHtml(layout?.thankYouMessage ?? "Thank you — visit again!")}</div>
+</div>
 `;
 }
 
 export function buildKotHtmlBody(o: PosKotPrintOptions): string {
+  const style = buildThermalStyle(o.layout);
   const headerLines = splitLines(o.billHeader);
   const headerHtml = headerLines.map((l) => `<div class="pre">${escapeHtml(l)}</div>`).join("");
   const rows = o.lines
@@ -437,7 +669,7 @@ export function buildKotHtmlBody(o: PosKotPrintOptions): string {
     })
     .join("");
   return `
-<style>${THERMAL_STYLE}</style>
+<style>${style}</style>
 <h1>KITCHEN ORDER</h1>
 <div class="muted">${escapeHtml(o.restaurantName)}</div>
 ${headerHtml}
@@ -445,7 +677,7 @@ ${headerHtml}
 <div class="total">${escapeHtml(o.orderRef)}</div>
 <div class="muted">${escapeHtml(o.fulfillmentLabel)}</div>
 ${o.dineInTable?.trim() ? `<div class="muted">Table: ${escapeHtml(o.dineInTable.trim())}</div>` : ""}
-<div class="muted">${escapeHtml(new Date().toLocaleString("en-IN"))}</div>
+<div class="muted">${escapeHtml(formatBillDateTime(new Date()))}</div>
 ${o.notes.trim() ? `<div class="muted">Note: ${escapeHtml(o.notes.trim())}</div>` : ""}
 <table>
 <thead><tr><th>Item</th><th class="right">Qty</th></tr></thead>
@@ -477,6 +709,105 @@ async function sendReceiptToDesktop(
   throw new Error(r.error || "Print failed");
 }
 
+/** Full HTML document for Settings preview (iframe — styles must not leak into the app). */
+export function buildBillPreviewDocument(options: PosBillPrintOptions): string {
+  const body = buildBillHtmlBody(options).replace(/<style>[\s\S]*?<\/style>/gi, "");
+  return wrapThermalPrintDocument(body, "Bill preview", options.layout);
+}
+
+export function buildKotPreviewDocument(options: PosKotPrintOptions): string {
+  const body = buildKotHtmlBody(options).replace(/<style>[\s\S]*?<\/style>/gi, "");
+  return wrapThermalPrintDocument(body, "KOT preview", options.layout);
+}
+
+/** Sample bill used in Settings → Bill preview. */
+export type BillPreviewFulfillment = "dine_in" | "pickup" | "delivery";
+
+const BILL_PREVIEW_SAMPLE_LINES: PosReceiptLine[] = [
+  {
+    label: "Veg. Chowmein (Half)",
+    qty: 1,
+    unit: 90,
+    subtotal: 90,
+  },
+  {
+    label: "Chicken Feast Pizza (Regular)",
+    qty: 1,
+    unit: 280,
+    subtotal: 280,
+  },
+];
+
+export function buildBillPreviewSampleOptions(
+  restaurantName: string,
+  layout: BillPrintLayout,
+  fulfillment: BillPreviewFulfillment = "delivery",
+): PosBillPrintOptions {
+  const base = {
+    restaurantName: layout.restaurantDisplayName.trim() || restaurantName.trim() || "Khaanz",
+    billHeader: "",
+    billFooter: "",
+    orderRef: "ORD-3516",
+    proforma: false,
+    notes: "",
+    paymentLabel: "",
+    lines: BILL_PREVIEW_SAMPLE_LINES,
+    total: 370,
+    printedAt: BILL_PREVIEW_SAMPLE_AT,
+    layout,
+  };
+
+  if (fulfillment === "dine_in") {
+    return {
+      ...base,
+      fulfillmentLabel: "Dine-in",
+      dineInTable: "T-5",
+      customerName: "Guest",
+      phoneDigits: "",
+    };
+  }
+
+  if (fulfillment === "pickup") {
+    return {
+      ...base,
+      fulfillmentLabel: "Pickup",
+      customerName: "Guest",
+      phoneDigits: "7889762589",
+    };
+  }
+
+  return {
+    ...base,
+    fulfillmentLabel: "Delivery",
+    customerName: "Guest",
+    phoneDigits: "7889762589",
+    customerAddress: "Near Mufti House",
+  };
+}
+
+/** Sample KOT used in Settings → Bill preview. */
+export function buildKotPreviewSampleOptions(
+  restaurantName: string,
+  layout: BillPrintLayout,
+  fulfillment: BillPreviewFulfillment = "delivery",
+): PosKotPrintOptions {
+  const bill = buildBillPreviewSampleOptions(restaurantName, layout, fulfillment);
+  return {
+    restaurantName: bill.restaurantName,
+    billHeader: bill.billHeader,
+    orderRef: bill.orderRef ?? "3516",
+    fulfillmentLabel: bill.fulfillmentLabel,
+    dineInTable: bill.dineInTable,
+    notes: "Sample kitchen note",
+    lines: bill.lines.map((r) => ({
+      label: r.label,
+      qty: r.qty,
+      addonRows: r.addonRows,
+    })),
+    layout,
+  };
+}
+
 export async function printPosBillThermal(
   options: PosBillPrintOptions,
   desktop?: DesktopPrintBridge,
@@ -491,7 +822,7 @@ export async function printPosBillThermal(
   const plainText = buildBillPlainText(options);
   const doc = plain
     ? wrapPlainTextPrintDocument(plainText, "Bill")
-    : wrapThermalPrintDocument(buildBillHtmlBody(options), "Bill");
+    : wrapThermalPrintDocument(buildBillHtmlBody(options), "Bill", options.layout);
   await sendReceiptToDesktop(desktop, platform, plainText, doc, "Bill");
 }
 
@@ -509,6 +840,6 @@ export async function printPosKotThermal(
   const plainText = buildKotPlainText(options);
   const doc = plain
     ? wrapPlainTextPrintDocument(plainText, "KOT")
-    : wrapThermalPrintDocument(buildKotHtmlBody(options), "KOT");
+    : wrapThermalPrintDocument(buildKotHtmlBody(options), "KOT", options.layout);
   await sendReceiptToDesktop(desktop, platform, plainText, doc, "KOT");
 }

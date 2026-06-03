@@ -23,6 +23,11 @@ import {
 } from "../lib/phone-digits";
 import { CategoryIcon } from "../lib/category-icons";
 import {
+  mergeBillPrintLayout,
+  normalizeBillPreviewSettings,
+  type BillPreviewSettings,
+} from "../lib/bill-preview-settings";
+import {
   cartLinesToReceiptRows,
   fulfillmentLabelFromKey,
   kotLinesFromCart,
@@ -44,12 +49,13 @@ import type {
   PosSettings,
   Session,
 } from "../types";
+import { BackendConnectionPanel } from "./BackendConnectionPanel";
 import { ItemConfigureDialog } from "./ItemConfigureDialog";
 import { OpenItemDialog } from "./OpenItemDialog";
 import { PrinterDialog } from "./PrinterDialog";
 import { RecentOrdersPanel } from "./RecentOrdersPanel";
 import { ReportsPanel } from "./ReportsPanel";
-import { BackendConnectionPanel } from "./BackendConnectionPanel";
+import { SettingsPanel } from "./SettingsPanel";
 
 function money(cents: number) {
   return `₹${(Number(cents || 0) / 100).toFixed(2)}`;
@@ -202,6 +208,9 @@ export function App() {
   const [deliveryChargeInput, setDeliveryChargeInput] = useState("");
   const [ordersRefreshKey, setOrdersRefreshKey] = useState(0);
   const [posSettings, setPosSettings] = useState<PosSettings | null>(null);
+  const [billPreviewSettings, setBillPreviewSettings] = useState<BillPreviewSettings | null>(
+    null,
+  );
   const [paymentMethodKey, setPaymentMethodKey] = useState("");
   type SubmitMode = "save" | "kot" | "bill" | "both";
   const [submittingMode, setSubmittingMode] = useState<SubmitMode | null>(null);
@@ -266,6 +275,22 @@ export function App() {
     const r = await api.getPosSettings();
     if (r.ok) setPosSettings(r.settings);
   }, [api]);
+
+  const loadBillPreviewSettings = useCallback(async () => {
+    if (!desktop?.getBillPreviewSettings) return;
+    const r = await desktop.getBillPreviewSettings();
+    if (r.ok) setBillPreviewSettings(normalizeBillPreviewSettings(r.settings));
+  }, [desktop]);
+
+  const billPrintLayout = useMemo(
+    () =>
+      mergeBillPrintLayout({
+        preview: billPreviewSettings ?? undefined,
+        posSettings,
+        apiOrigin: boot?.apiOrigin ?? null,
+      }),
+    [billPreviewSettings, posSettings, boot?.apiOrigin],
+  );
 
   const refreshPrinterStatus = useCallback(async () => {
     if (!desktop?.getPrinterStatus) {
@@ -645,6 +670,7 @@ export function App() {
       }
       await loadMenu();
       await loadPosSettings();
+      await loadBillPreviewSettings();
       await refreshPrinterStatus();
       await refreshConnectivity();
       await refreshSyncStatus();
@@ -655,6 +681,7 @@ export function App() {
     desktop,
     loadMenu,
     loadPosSettings,
+    loadBillPreviewSettings,
     refreshPrinterStatus,
     refreshConnectivity,
     refreshSyncStatus,
@@ -717,6 +744,7 @@ export function App() {
       }
       await loadMenu();
       await loadPosSettings();
+      await loadBillPreviewSettings();
       setOrdersRefreshKey((k) => k + 1);
       await refreshConnectivity();
       await refreshSyncStatus();
@@ -751,10 +779,18 @@ export function App() {
       if (session) {
         await loadMenu();
         await loadPosSettings();
+        await loadBillPreviewSettings();
         setOrdersRefreshKey((k) => k + 1);
       }
     },
-    [session, refreshConnectivity, refreshSyncStatus, loadMenu, loadPosSettings],
+    [
+      session,
+      refreshConnectivity,
+      refreshSyncStatus,
+      loadMenu,
+      loadPosSettings,
+      loadBillPreviewSettings,
+    ],
   );
 
   const paymentDisplayName = useCallback(
@@ -874,6 +910,7 @@ export function App() {
                 fulfillmentLabel: fulfillLabel,
                 notes: notesSnap,
                 lines: snapshotKot,
+                layout: billPrintLayout,
               },
               desktop,
             );
@@ -889,6 +926,8 @@ export function App() {
                 fulfillmentLabel: fulfillLabel,
                 customerName: nameSnap,
                 phoneDigits: phonePrint,
+                customerAddress:
+                  fulfillment === "delivery" ? address.trim() || undefined : undefined,
                 notes: notesSnap,
                 footerNote: footerNote || undefined,
                 paymentLabel: paymentDisplayName(payKey),
@@ -897,6 +936,7 @@ export function App() {
                 itemsSubtotal: itemsSubtotalPrint,
                 deliveryCharge: deliveryPrint > 0 ? deliveryPrint : undefined,
                 discount: discountPrint > 0 ? discountPrint : undefined,
+                layout: billPrintLayout,
               },
               desktop,
             );
@@ -923,10 +963,12 @@ export function App() {
       paymentMethodKey,
       fulfillment,
       posSettings,
+      billPrintLayout,
       paymentDisplayName,
       refreshSyncStatus,
       printerReady,
       customerName,
+      address,
       phone,
       address,
       landmark,
@@ -1223,21 +1265,15 @@ export function App() {
       </nav>
 
       {mainTab === "settings" ? (
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          <div className="mx-auto max-w-lg space-y-6">
-            <BackendConnectionPanel
-              api={api}
-              variant="settings"
-              onSaved={(info) => void handleBackendSaved(info)}
-            />
-            <div className="rounded-xl border p-4 text-muted-foreground text-sm">
-              <p className="font-medium text-foreground">Printer</p>
-              <p className="mt-1 text-xs">
-                Use <strong>Printer</strong> in the header — any connected printer works for KOT and
-                bills.
-              </p>
-            </div>
-          </div>
+        <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4">
+          <SettingsPanel
+            api={api}
+            desktop={desktop}
+            posSettings={posSettings}
+            apiOrigin={boot?.apiOrigin ?? null}
+            onBackendSaved={(info) => void handleBackendSaved(info)}
+            onBillPreviewSaved={(s) => setBillPreviewSettings(normalizeBillPreviewSettings(s))}
+          />
         </div>
       ) : null}
 
@@ -1246,6 +1282,7 @@ export function App() {
           sessionId={session.id}
           refreshKey={ordersRefreshKey}
           posSettings={posSettings}
+          billPrintLayout={billPrintLayout}
           printerConnected={printerConnected}
         />
       ) : mainTab === "reports" ? (

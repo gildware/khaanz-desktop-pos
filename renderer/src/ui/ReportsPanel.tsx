@@ -190,19 +190,19 @@ export function ReportsPanel({ refreshKey = 0 }: Props) {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-              <ReportSection
-                title="Item revenue share"
-                subtitle="Top items by revenue"
-                className="min-w-0"
-              >
-                {itemsPieData.length === 0 ? (
-                  <p className="text-muted-foreground text-sm">No item sales recorded today.</p>
-                ) : (
-                  <ItemsPieChart data={itemsPieData} height={240} compact />
-                )}
-              </ReportSection>
+            <ReportSection
+              title="Item revenue share"
+              subtitle="Top items by revenue"
+              className="min-w-0"
+            >
+              {itemsPieData.length === 0 ? (
+                <p className="text-muted-foreground text-sm">No item sales recorded today.</p>
+              ) : (
+                <ItemsPieChart data={itemsPieData} height={280} />
+              )}
+            </ReportSection>
 
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <ReportSection
                 title="Hourly sales"
                 subtitle="Sales & orders by hour (IST)"
@@ -211,7 +211,7 @@ export function ReportsPanel({ refreshKey = 0 }: Props) {
                 {hourlyChartData.length === 0 ? (
                   <p className="text-muted-foreground text-sm">No hourly sales yet today.</p>
                 ) : (
-                  <HourlyBarChart data={hourlyChartData} height={240} compact />
+                  <HourlyBarChart data={hourlyChartData} height={260} compact />
                 )}
               </ReportSection>
 
@@ -223,7 +223,7 @@ export function ReportsPanel({ refreshKey = 0 }: Props) {
                 {itemsBarData.length === 0 ? (
                   <p className="text-muted-foreground text-sm">No item sales recorded today.</p>
                 ) : (
-                  <ItemsBarChart data={itemsBarData} height={240} compact />
+                  <ItemsBarChart data={itemsBarData} height={260} compact />
                 )}
               </ReportSection>
             </div>

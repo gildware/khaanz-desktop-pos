@@ -62,5 +62,9 @@ contextBridge.exposeInMainWorld("khaanzDesktop", {
   getTodaySalesReport: () => invoke("khaanz:pos-today-report"),
   updatePosOrderStatus: (orderId, status) =>
     invoke("khaanz:pos-update-order-status", { orderId, status }),
+  getBillPreviewSettings: () => invoke("khaanz:get-bill-preview-settings"),
+  setBillPreviewSettings: (settings) =>
+    invoke("khaanz:set-bill-preview-settings", { settings }),
+  pickBillLogo: () => invoke("khaanz:pick-bill-logo"),
 });
 

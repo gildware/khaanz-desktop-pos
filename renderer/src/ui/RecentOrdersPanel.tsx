@@ -8,6 +8,7 @@ import {
   receiptLineToKotLine,
 } from "../lib/pos-print";
 import { nextOrderStep, orderStatusBadgeClassName, statusLabelFor } from "../lib/order-status";
+import type { BillPrintLayout } from "../lib/bill-preview-settings";
 import type { PosSettings, RecentOrderRow } from "../types";
 import { OrderLineView } from "./OrderLineView";
 import {
@@ -33,6 +34,7 @@ type Props = {
   sessionId: string;
   refreshKey?: number;
   posSettings: PosSettings | null;
+  billPrintLayout?: BillPrintLayout;
   printerConnected?: boolean;
 };
 
@@ -40,6 +42,7 @@ export function RecentOrdersPanel({
   sessionId,
   refreshKey = 0,
   posSettings,
+  billPrintLayout,
   printerConnected = false,
 }: Props) {
   const api = window.posDesktop;
@@ -196,6 +199,7 @@ export function RecentOrdersPanel({
               dineInTable: o.dineInTable?.trim() || undefined,
               notes: "",
               lines: kotLines,
+              layout: billPrintLayout,
             },
             desktop,
           );
@@ -216,6 +220,7 @@ export function RecentOrdersPanel({
               paymentLabel: "",
               lines: receiptLines,
               total: o.totalMinor / 100,
+              layout: billPrintLayout,
             },
             desktop,
           );
@@ -224,7 +229,7 @@ export function RecentOrdersPanel({
         setError(String(e instanceof Error ? e.message : e));
       }
     },
-    [desktop, posSettings, isOrderPrintOnCooldown, startPrintCooldown],
+    [desktop, posSettings, billPrintLayout, isOrderPrintOnCooldown, startPrintCooldown],
   );
 
   if (initialLoad) {

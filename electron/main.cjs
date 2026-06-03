@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, net } = require("electron");
+const { app, BrowserWindow, ipcMain, net, dialog } = require("electron");
 const { initAutoUpdater, autoUpdater } = require("./auto-updater.cjs");
 const {
   readStoredBackendConfig,
@@ -614,6 +614,51 @@ function writeSettingsJson(db, payloadJson) {
   db.prepare(
     "INSERT INTO settings_cache(id,payload_json,updated_at) VALUES('settings',?,?) ON CONFLICT(id) DO UPDATE SET payload_json=excluded.payload_json, updated_at=excluded.updated_at",
   ).run(s, nowIso());
+}
+
+const BILL_PREVIEW_META_KEY = "bill_preview_settings";
+/** Max local bill logo file size (5 MB). */
+const BILL_LOGO_MAX_BYTES = 5 * 1024 * 1024;
+
+function estimateDataUrlBytes(dataUrl) {
+  if (!dataUrl || typeof dataUrl !== "string" || !dataUrl.startsWith("data:")) return 0;
+  const comma = dataUrl.indexOf(",");
+  if (comma < 0) return 0;
+  const b64 = dataUrl.slice(comma + 1);
+  return Math.floor((b64.length * 3) / 4);
+}
+
+function defaultBillPreviewSettings() {
+  return {
+    themeId: "classic",
+    logoDataUrl: "",
+    restaurantName: "",
+    restaurantPhone: "",
+    restaurantAddress: "",
+    footerNotes: "",
+    showLogo: true,
+    showRestaurantName: true,
+    showPhone: true,
+    showAddress: true,
+    showOrderId: true,
+    showFooterNotes: true,
+  };
+}
+
+function readBillPreviewSettingsJson(db) {
+  try {
+    const row = db.prepare("SELECT value FROM meta WHERE key=?").get(BILL_PREVIEW_META_KEY);
+    return row && typeof row.value === "string" ? row.value : "";
+  } catch {
+    return "";
+  }
+}
+
+function writeBillPreviewSettingsJson(db, payloadJson) {
+  db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)").run(
+    BILL_PREVIEW_META_KEY,
+    payloadJson,
+  );
 }
 
 function defaultPosSettings() {
@@ -1849,6 +1894,76 @@ function registerIpc() {
       return { ok: true, settings: JSON.parse(raw) };
     } catch {
       return { ok: true, settings: defaultPosSettings() };
+    }
+  });
+
+  ipcMain.handle("khaanz:get-bill-preview-settings", async () => {
+    const raw = readBillPreviewSettingsJson(db);
+    if (!raw) return { ok: true, settings: defaultBillPreviewSettings() };
+    try {
+      const parsed = JSON.parse(raw);
+      return {
+        ok: true,
+        settings: { ...defaultBillPreviewSettings(), ...(parsed && typeof parsed === "object" ? parsed : {}) },
+      };
+    } catch {
+      return { ok: true, settings: defaultBillPreviewSettings() };
+    }
+  });
+
+  ipcMain.handle("khaanz:set-bill-preview-settings", async (_evt, payload) => {
+    const settings =
+      payload && typeof payload.settings === "object" && payload.settings
+        ? payload.settings
+        : payload;
+    if (!settings || typeof settings !== "object") {
+      return { ok: false, error: "Invalid settings" };
+    }
+    const merged = { ...defaultBillPreviewSettings(), ...settings };
+    if (merged.logoDataUrl) {
+      const logoBytes = estimateDataUrlBytes(merged.logoDataUrl);
+      if (logoBytes > BILL_LOGO_MAX_BYTES) {
+        return { ok: false, error: "Logo image is too large (max 5 MB)." };
+      }
+    }
+    writeBillPreviewSettingsJson(db, JSON.stringify(merged));
+    return { ok: true, settings: merged };
+  });
+
+  ipcMain.handle("khaanz:pick-bill-logo", async (evt) => {
+    const win = BrowserWindow.fromWebContents(evt.sender);
+    const opts = {
+      properties: ["openFile"],
+      filters: [
+        { name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp"] },
+      ],
+    };
+    const result = win
+      ? await dialog.showOpenDialog(win, opts)
+      : await dialog.showOpenDialog(opts);
+    if (result.canceled || !result.filePaths?.[0]) {
+      return { ok: true, dataUrl: null };
+    }
+    const filePath = result.filePaths[0];
+    const ext = path.extname(filePath).toLowerCase();
+    const mime =
+      ext === ".png"
+        ? "image/png"
+        : ext === ".gif"
+          ? "image/gif"
+          : ext === ".webp"
+            ? "image/webp"
+            : ext === ".bmp"
+              ? "image/bmp"
+              : "image/jpeg";
+    try {
+      const buf = fs.readFileSync(filePath);
+      if (buf.length > BILL_LOGO_MAX_BYTES) {
+        return { ok: false, error: "Image is too large (max 5 MB)." };
+      }
+      return { ok: true, dataUrl: `data:${mime};base64,${buf.toString("base64")}` };
+    } catch (e) {
+      return { ok: false, error: String(e && e.message ? e.message : e) };
     }
   });
 

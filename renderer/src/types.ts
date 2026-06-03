@@ -99,6 +99,8 @@ export type PaymentMethodConfig = {
 
 export type PosSettings = {
   displayName: string;
+  logoUrl?: string;
+  whatsappPhoneE164?: string;
   billHeader: string;
   billFooter: string;
   paymentMethods: PaymentMethodConfig[];
@@ -327,6 +329,19 @@ export type KhaanzDesktopApi = {
   listPrinters: () => Promise<Array<{ name: string; isDefault?: boolean }>>;
   getSilentPrinter: () => Promise<{ deviceName: string }>;
   setSilentPrinter: (deviceName: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+  getBillPreviewSettings: () => Promise<
+    | { ok: true; settings: import("./lib/bill-preview-settings").BillPreviewSettings }
+    | { ok: false; error: string }
+  >;
+  setBillPreviewSettings: (
+    settings: import("./lib/bill-preview-settings").BillPreviewSettings,
+  ) => Promise<
+    | { ok: true; settings: import("./lib/bill-preview-settings").BillPreviewSettings }
+    | { ok: false; error: string }
+  >;
+  pickBillLogo: () => Promise<
+    { ok: true; dataUrl: string | null } | { ok: false; error: string }
+  >;
 };
 
 declare global {
