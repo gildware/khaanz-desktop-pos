@@ -2,12 +2,17 @@ import { resolveMenuMediaUrl } from "./menu-media";
 import {
   BILL_LOGO_BASE_HEIGHT_MM,
   BILL_LOGO_BASE_WIDTH_MM,
+  BILL_LOGO_SIZE_PERCENT,
   getBillTheme,
   inferThemeFromLegacySettings,
   normalizeBillThemeId,
   type BillThemeDefinition,
   type BillThemeId,
 } from "./bill-themes";
+
+export const BILL_LOGO_SIZE_MIN = 20;
+export const BILL_LOGO_SIZE_MAX = 100;
+export const BILL_LOGO_SIZE_DEFAULT = BILL_LOGO_SIZE_PERCENT;
 
 export type { BillThemeId } from "./bill-themes";
 export { BILL_THEMES, getBillTheme } from "./bill-themes";
@@ -23,6 +28,8 @@ export type BillPreviewSettings = {
   themeId: BillThemeId;
   /** Local logo override (data URL). Falls back to synced admin logo. */
   logoDataUrl: string;
+  /** Logo scale on receipt (20–100). */
+  logoSizePercent: number;
   /** Empty = use name synced from admin / POS settings. */
   restaurantName: string;
   restaurantPhone: string;
@@ -39,6 +46,7 @@ export type BillPreviewSettings = {
 export const DEFAULT_BILL_PREVIEW_SETTINGS: BillPreviewSettings = {
   themeId: "classic",
   logoDataUrl: "",
+  logoSizePercent: BILL_LOGO_SIZE_DEFAULT,
   restaurantName: "",
   restaurantPhone: "",
   restaurantAddress: "",
@@ -99,6 +107,12 @@ function readBool(raw: Record<string, unknown>, key: keyof BillPreviewSettings, 
   return typeof v === "boolean" ? v : fallback;
 }
 
+export function normalizeLogoSizePercent(raw: unknown): number {
+  const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
+  if (!Number.isFinite(n)) return BILL_LOGO_SIZE_DEFAULT;
+  return Math.min(BILL_LOGO_SIZE_MAX, Math.max(BILL_LOGO_SIZE_MIN, Math.round(n)));
+}
+
 export function normalizeBillPreviewSettings(
   raw: Partial<BillPreviewSettings> & Record<string, unknown> | null | undefined,
 ): BillPreviewSettings {
@@ -120,6 +134,7 @@ export function normalizeBillPreviewSettings(
   return {
     themeId,
     logoDataUrl: typeof raw.logoDataUrl === "string" ? raw.logoDataUrl : d.logoDataUrl,
+    logoSizePercent: normalizeLogoSizePercent(raw.logoSizePercent),
     restaurantName: typeof raw.restaurantName === "string" ? raw.restaurantName : d.restaurantName,
     restaurantPhone:
       typeof raw.restaurantPhone === "string" ? raw.restaurantPhone : d.restaurantPhone,
@@ -168,11 +183,13 @@ export function mergeBillPrintLayout(args: {
   const preview = normalizeBillPreviewSettings(args.preview ?? undefined);
   const theme = getBillTheme(preview.themeId);
   const w = FONT_WEIGHT_MAP[theme.fontWeight];
-  const logoDims = logoDimensionsMm(theme.logoSizePercent);
+  const logoSizePercent = normalizeLogoSizePercent(preview.logoSizePercent);
+  const logoDims = logoDimensionsMm(logoSizePercent);
   const syncedLogo = resolveBillLogoSrc(preview, args.posSettings, args.apiOrigin);
 
   return {
     ...theme,
+    logoSizePercent,
     themeClass: `bill-theme-${theme.id}`,
     logoSrc: preview.showLogo && syncedLogo ? syncedLogo : "",
     ...logoDims,

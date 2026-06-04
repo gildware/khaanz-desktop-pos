@@ -632,6 +632,7 @@ function defaultBillPreviewSettings() {
   return {
     themeId: "classic",
     logoDataUrl: "",
+    logoSizePercent: 42,
     restaurantName: "",
     restaurantPhone: "",
     restaurantAddress: "",

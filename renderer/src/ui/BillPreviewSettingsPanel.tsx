@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { CheckIcon, Loader2Icon } from "lucide-react";
+import { CheckIcon, ImageIcon, Loader2Icon } from "lucide-react";
 import {
+  BILL_LOGO_SIZE_MAX,
+  BILL_LOGO_SIZE_MIN,
   BILL_THEMES,
   DEFAULT_BILL_PREVIEW_SETTINGS,
   mergeBillPrintLayout,
@@ -38,13 +40,13 @@ function ToggleSwitch({
   description?: string;
 }) {
   return (
-    <div className="flex items-start justify-between gap-3">
+    <div className="flex items-start justify-between gap-2">
       <div className="min-w-0 space-y-0.5">
         <label htmlFor={id} className="font-medium text-sm">
           {label}
         </label>
         {description ? (
-          <p className="text-muted-foreground text-xs leading-snug">{description}</p>
+          <p className="text-muted-foreground text-[11px] leading-snug">{description}</p>
         ) : null}
       </div>
       <button
@@ -85,7 +87,7 @@ function BillFieldCard({
 }) {
   return (
     <div
-      className={`rounded-lg border p-3 transition-opacity ${
+      className={`rounded-md border px-2.5 py-2 transition-opacity ${
         enabled ? "border-border bg-card" : "border-border/70 bg-muted/20"
       }`}
     >
@@ -98,7 +100,7 @@ function BillFieldCard({
       />
       {children ? (
         <div
-          className={`mt-3 space-y-1 ${enabled ? "" : "pointer-events-none opacity-40"}`}
+          className={`mt-2 space-y-1.5 ${enabled ? "" : "pointer-events-none opacity-40"}`}
           aria-hidden={!enabled}
         >
           {children}
@@ -110,12 +112,12 @@ function BillFieldCard({
 
 function ReceiptPreviewFrame({ title, srcDoc }: { title: string; srcDoc: string }) {
   return (
-    <div className="min-w-0 space-y-1.5">
+    <div className="min-w-0 space-y-1">
       <p className="text-center font-medium text-muted-foreground text-xs">{title}</p>
       <div className="mx-auto w-full max-w-[300px] overflow-hidden rounded-md border-2 border-neutral-400 bg-white shadow-sm">
         <iframe
           title={title}
-          className="block h-[min(320px,38vh)] w-full border-0 bg-white grayscale contrast-125"
+          className="block h-[min(300px,36vh)] w-full border-0 bg-white grayscale contrast-125"
           srcDoc={srcDoc}
         />
       </div>
@@ -138,6 +140,7 @@ export function BillPreviewSettingsPanel({
   const [settings, setSettings] = useState<BillPreviewSettings>(DEFAULT_BILL_PREVIEW_SETTINGS);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [pickingLogo, setPickingLogo] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -173,6 +176,7 @@ export function BillPreviewSettingsPanel({
   );
 
   const syncedRestaurantName = posSettings?.displayName?.trim() || "Khaanz";
+  const logoPreviewSrc = settings.showLogo ? layout.logoSrc : "";
 
   const billPreviewDocs = useMemo(
     () =>
@@ -223,6 +227,29 @@ export function BillPreviewSettingsPanel({
     setMessage("");
   };
 
+  const pickLogo = useCallback(async () => {
+    if (!desktop.pickBillLogo) {
+      setError("Logo upload is not available in this build.");
+      return;
+    }
+    setPickingLogo(true);
+    setError("");
+    try {
+      const r = await desktop.pickBillLogo();
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      if (r.dataUrl) {
+        update({ logoDataUrl: r.dataUrl, showLogo: true });
+      }
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setPickingLogo(false);
+    }
+  }, [desktop]);
+
   if (loading) {
     return (
       <div className="flex items-center gap-2 rounded-xl border p-4 text-muted-foreground text-sm">
@@ -234,16 +261,15 @@ export function BillPreviewSettingsPanel({
 
   return (
     <div className="min-w-0 rounded-xl border p-4">
-      <p className="mb-6 text-muted-foreground text-xs">
-        Pick a bill theme, choose what appears on the receipt, and preview 80mm thermal output.
-        Leave fields blank to use values synced from admin where noted.
+      <p className="mb-4 text-muted-foreground text-xs">
+        Theme, header fields, and footer notes for 80mm thermal bills. Previews update live.
       </p>
 
-      <div className="grid min-w-0 gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(280px,340px)] lg:items-start">
-        <section className="min-w-0 space-y-6">
-          <div className="space-y-3">
+      <div className="grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(280px,340px)] lg:items-start">
+        <section className="min-w-0 space-y-4">
+          <div className="space-y-2">
             <h2 className="font-medium text-sm">Bill theme</h2>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
               {BILL_THEMES.map((theme) => {
                 const selected = settings.themeId === theme.id;
                 return (
@@ -251,49 +277,95 @@ export function BillPreviewSettingsPanel({
                     key={theme.id}
                     type="button"
                     onClick={() => update({ themeId: theme.id as BillThemeId })}
-                    className={`relative rounded-lg border p-3 text-left transition-colors ${
+                    className={`relative rounded-md border px-2 py-1.5 text-left transition-colors ${
                       selected
-                        ? "border-primary bg-primary/5 ring-2 ring-primary"
+                        ? "border-primary bg-primary/5 ring-1 ring-primary"
                         : "border-border bg-card hover:border-primary/40"
                     }`}
                   >
                     {selected ? (
-                      <CheckIcon className="absolute top-2 right-2 size-4 text-primary" />
+                      <CheckIcon className="absolute top-1 right-1 size-3.5 text-primary" />
                     ) : null}
-                    <p className="pr-6 font-medium text-sm">{theme.name}</p>
-                    <p className="mt-1 text-muted-foreground text-xs leading-snug">
-                      {theme.description}
-                    </p>
+                    <p className="pr-5 font-medium text-xs">{theme.name}</p>
                   </button>
                 );
               })}
             </div>
           </div>
 
-          <div className="space-y-3">
-            <div>
-              <h2 className="font-medium text-sm">Bill header & footer</h2>
-              <p className="mt-0.5 text-muted-foreground text-xs">
-                Toggle each line on or off. Previews update as you change settings.
-              </p>
-            </div>
-
-            <div className="grid min-w-0 gap-3">
+          <div className="space-y-2">
+            <h2 className="font-medium text-sm">Bill header</h2>
+            <div className="grid min-w-0 gap-2">
               <BillFieldCard
                 id="bill-show-logo"
                 label="Logo"
-                description="Uses logo synced from admin settings."
+                description={
+                  settings.logoDataUrl.trim()
+                    ? "Using uploaded logo."
+                    : posSettings?.logoUrl
+                      ? "Using admin sync — upload to override."
+                      : "Upload a logo or sync from admin."
+                }
                 enabled={settings.showLogo}
                 onEnabledChange={(showLogo) => update({ showLogo })}
-              />
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded border bg-white">
+                    {logoPreviewSrc ? (
+                      <img
+                        src={logoPreviewSrc}
+                        alt=""
+                        className="max-h-full max-w-full object-contain"
+                      />
+                    ) : (
+                      <ImageIcon className="size-4 text-muted-foreground" />
+                    )}
+                  </div>
+                  <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      disabled={pickingLogo}
+                      onClick={() => void pickLogo()}
+                      className="h-7 rounded border bg-background px-2.5 text-xs hover:bg-muted disabled:opacity-50"
+                    >
+                      {pickingLogo ? "Opening…" : "Upload"}
+                    </button>
+                    {settings.logoDataUrl.trim() ? (
+                      <button
+                        type="button"
+                        onClick={() => update({ logoDataUrl: "" })}
+                        className="h-7 rounded border border-dashed px-2.5 text-muted-foreground text-xs hover:bg-muted"
+                      >
+                        Clear upload
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-8 shrink-0 text-muted-foreground text-xs">Size</span>
+                  <input
+                    type="range"
+                    min={BILL_LOGO_SIZE_MIN}
+                    max={BILL_LOGO_SIZE_MAX}
+                    value={settings.logoSizePercent}
+                    onChange={(e) =>
+                      update({ logoSizePercent: Number.parseInt(e.target.value, 10) })
+                    }
+                    className="min-w-0 flex-1 accent-primary"
+                  />
+                  <span className="w-9 shrink-0 text-right font-mono text-xs tabular-nums">
+                    {settings.logoSizePercent}%
+                  </span>
+                </div>
+              </BillFieldCard>
 
               <BillFieldCard
                 id="bill-show-name"
                 label="Restaurant name"
                 description={
                   settings.restaurantName.trim()
-                    ? "Custom name below is printed."
-                    : `Synced name: ${syncedRestaurantName}`
+                    ? "Custom name below."
+                    : `Sync: ${syncedRestaurantName}`
                 }
                 enabled={settings.showRestaurantName}
                 onEnabledChange={(showRestaurantName) => update({ showRestaurantName })}
@@ -304,13 +376,13 @@ export function BillPreviewSettingsPanel({
                   value={settings.restaurantName}
                   onChange={(e) => update({ restaurantName: e.target.value })}
                   placeholder={syncedRestaurantName}
-                  className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                  className="h-8 w-full rounded-md border bg-background px-2.5 text-sm"
                 />
               </BillFieldCard>
 
               <BillFieldCard
                 id="bill-show-phone"
-                label="Phone number"
+                label="Phone"
                 enabled={settings.showPhone}
                 onEnabledChange={(showPhone) => update({ showPhone })}
               >
@@ -321,10 +393,10 @@ export function BillPreviewSettingsPanel({
                   onChange={(e) => update({ restaurantPhone: e.target.value })}
                   placeholder={
                     posSettings?.whatsappPhoneE164
-                      ? `From sync: ${posSettings.whatsappPhoneE164}`
-                      : "e.g. 9906615998"
+                      ? `Sync: ${posSettings.whatsappPhoneE164}`
+                      : "9906615998"
                   }
-                  className="h-9 w-full rounded-md border bg-background px-3 font-mono text-sm"
+                  className="h-8 w-full rounded-md border bg-background px-2.5 font-mono text-sm"
                 />
               </BillFieldCard>
 
@@ -338,46 +410,49 @@ export function BillPreviewSettingsPanel({
                   id="bill-rest-address"
                   value={settings.restaurantAddress}
                   onChange={(e) => update({ restaurantAddress: e.target.value })}
-                  placeholder={"123 Main Road\nCity, State — PIN"}
-                  rows={3}
-                  className="w-full resize-y rounded-md border bg-background px-3 py-2 text-sm"
+                  placeholder="123 Main Road, City"
+                  rows={2}
+                  className="w-full resize-y rounded-md border bg-background px-2.5 py-1.5 text-sm"
                 />
               </BillFieldCard>
 
               <BillFieldCard
                 id="bill-show-order-id"
                 label="Order ID"
-                description={`Label: ${layout.orderIdLabel} — ${layout.orderIdFormat === "short" ? "short number" : "full reference"}`}
+                description={`${layout.orderIdLabel} · ${layout.orderIdFormat === "short" ? "short" : "full"}`}
                 enabled={settings.showOrderId}
                 onEnabledChange={(showOrderId) => update({ showOrderId })}
               />
-
-              <BillFieldCard
-                id="bill-show-footer"
-                label="Footer notes"
-                description="GSTIN, FSSAI, thank-you lines, etc. Admin bill footer from sync is always included."
-                enabled={settings.showFooterNotes}
-                onEnabledChange={(showFooterNotes) => update({ showFooterNotes })}
-              >
-                <textarea
-                  id="bill-footer-notes"
-                  value={settings.footerNotes}
-                  onChange={(e) => update({ footerNotes: e.target.value })}
-                  placeholder={"GSTIN: 29XXXXX1234X1Z5\nFSSAI: 12345678901234\nThank you for dining with us!"}
-                  rows={4}
-                  className="w-full resize-y rounded-md border bg-background px-3 py-2 text-sm"
-                />
-              </BillFieldCard>
             </div>
+          </div>
+
+          <div className="space-y-2">
+            <h2 className="font-medium text-sm">Bill footer</h2>
+            <BillFieldCard
+              id="bill-show-footer"
+              label="Footer notes"
+              description="Only these lines print at the bottom of the bill."
+              enabled={settings.showFooterNotes}
+              onEnabledChange={(showFooterNotes) => update({ showFooterNotes })}
+            >
+              <textarea
+                id="bill-footer-notes"
+                value={settings.footerNotes}
+                onChange={(e) => update({ footerNotes: e.target.value })}
+                placeholder={"GSTIN: 29XXXXX1234X1Z5\nFSSAI: 12345678901234"}
+                rows={3}
+                className="w-full resize-y rounded-md border bg-background px-2.5 py-1.5 text-sm"
+              />
+            </BillFieldCard>
           </div>
 
           <button
             type="button"
             disabled={saving}
             onClick={() => void persist(settings)}
-            className="h-9 rounded-md bg-primary px-4 font-medium text-primary-foreground text-sm disabled:opacity-50"
+            className="h-8 rounded-md bg-primary px-3 font-medium text-primary-foreground text-sm disabled:opacity-50"
           >
-            {saving ? "Saving…" : "Save theme & details"}
+            {saving ? "Saving…" : "Save"}
           </button>
 
           {message ? (
@@ -386,15 +461,9 @@ export function BillPreviewSettingsPanel({
           {error ? <p className="text-destructive text-xs">{error}</p> : null}
         </section>
 
-        <section className="min-w-0 space-y-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:border-l lg:pl-6">
-          <div>
-            <h2 className="font-medium text-sm">Thermal preview</h2>
-            <p className="text-muted-foreground text-xs">
-              Black and white — toggled fields update live.
-            </p>
-          </div>
-
-          <div className="space-y-6">
+        <section className="min-w-0 space-y-3 lg:sticky lg:top-4 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:border-l lg:pl-5">
+          <p className="font-medium text-sm">Thermal preview</p>
+          <div className="space-y-4">
             {billPreviewDocs.map((preview) => (
               <ReceiptPreviewFrame
                 key={preview.id}
@@ -403,8 +472,7 @@ export function BillPreviewSettingsPanel({
               />
             ))}
           </div>
-
-          <div className="border-t border-dashed pt-4">
+          <div className="border-t border-dashed pt-3">
             <ReceiptPreviewFrame title="KOT" srcDoc={kotPreviewDoc} />
           </div>
         </section>

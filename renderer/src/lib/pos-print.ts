@@ -235,7 +235,6 @@ function buildThermalStyle(layout?: BillPrintLayout): string {
   ${r} .totals-row { display: flex; justify-content: space-between; font-size: 11px; margin: 4px 0; }
   ${r} .grand-total { display: flex; justify-content: space-between; align-items: baseline; font-size: ${grandSize}px; font-weight: ${weightNum + 100}; margin: 8px 0 4px; }
   ${r} .payment-status { font-size: 11px; margin: 4px 0; }
-  ${r} .thank-you { text-align: center; font-size: 11px; margin-top: 8px; }
   ${r} tr.addon-line td { font-size: 10px; line-height: 1.3; }
   ${r} tr.addon-line .iname { padding-left: 8px; }
   ${r} h1 { font-size: 16px; margin: 0 0 8px; text-align: center; }
@@ -496,12 +495,10 @@ export function buildBillPlainText(o: PosBillPrintOptions): string {
     ? o.paymentLabel.trim()
     : (layout?.unpaidLabel ?? "Not Paid");
   lines.push(payStatus.slice(0, PLAIN_WIDTH));
-  for (const f of splitLines(o.billFooter)) lines.push(f.slice(0, PLAIN_WIDTH));
   if (layout?.showFooterNotes !== false) {
     for (const f of splitLines(layout?.footerNotes ?? "")) lines.push(f.slice(0, PLAIN_WIDTH));
   }
   if (o.notes.trim()) lines.push(`Note: ${o.notes.trim()}`.slice(0, PLAIN_WIDTH));
-  lines.push(centerPlain(layout?.thankYouMessage ?? "Thank you — visit again!"));
   lines.push("");
   return lines.join("\n");
 }
@@ -533,7 +530,6 @@ export function buildBillHtmlBody(o: PosBillPrintOptions): string {
   const layout = o.layout;
   const style = buildThermalStyle(layout);
   const headerLines = splitLines(o.billHeader);
-  const footerLines = splitLines(o.billFooter);
   const now = o.printedAt ?? new Date();
   const rows = o.lines
     .flatMap((r) => {
@@ -562,7 +558,6 @@ export function buildBillHtmlBody(o: PosBillPrintOptions): string {
     : "";
 
   const headerHtml = headerLines.map((l) => `<div class="pre">${escapeHtml(l)}</div>`).join("");
-  const footerHtml = footerLines.map((l) => `<div class="pre">${escapeHtml(l)}</div>`).join("");
   const customFooterHtml =
     layout?.showFooterNotes !== false
       ? splitLines(layout?.footerNotes ?? "")
@@ -644,10 +639,8 @@ ${extraTotals.join("")}
 <hr class="${rule}"/>
 <div class="grand-total"><span>Grand Total</span><span>₹${o.total.toFixed(2)}</span></div>
 <div class="payment-status">${escapeHtml(payStatus)}</div>
-${footerHtml}
 ${customFooterHtml}
 ${o.notes.trim() ? `<div class="muted">Note: ${escapeHtml(o.notes.trim())}</div>` : ""}
-<div class="thank-you">${escapeHtml(layout?.thankYouMessage ?? "Thank you — visit again!")}</div>
 </div>
 `;
 }
