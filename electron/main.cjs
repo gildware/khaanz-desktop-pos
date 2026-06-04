@@ -805,15 +805,46 @@ async function isPrinterOnlineOnOs(printerName) {
 async function waitForPrintDocumentReady(webContents) {
   await webContents.executeJavaScript(`
     new Promise((resolve) => {
-      const done = () => requestAnimationFrame(() => requestAnimationFrame(resolve));
+      const finish = () => requestAnimationFrame(() => requestAnimationFrame(resolve));
+      const imgs = Array.from(document.images || []);
+      let pending = imgs.filter((img) => !img.complete);
+      const onImgDone = () => {
+        pending = pending.filter((img) => !img.complete);
+        if (pending.length === 0) finish();
+      };
+      for (const img of imgs) {
+        img.addEventListener("load", onImgDone);
+        img.addEventListener("error", onImgDone);
+      }
+      const afterFonts = () => {
+        if (pending.length === 0) finish();
+        else setTimeout(finish, 3000);
+      };
       if (document.fonts && document.fonts.ready) {
-        document.fonts.ready.then(done).catch(done);
+        document.fonts.ready.then(afterFonts).catch(afterFonts);
       } else {
-        done();
+        afterFonts();
       }
     })
   `);
   await new Promise((r) => setTimeout(r, 80));
+}
+
+async function receiptDocumentNeedsVisualPrint(webContents) {
+  return webContents.executeJavaScript(`
+    (() => {
+      const imgs = document.querySelectorAll(
+        "img.logo, .logo-wrap img, .thermal-receipt-root img",
+      );
+      if (!imgs.length) return false;
+      return Array.from(imgs).some((img) => {
+        const src = String(img.getAttribute("src") || img.src || "").trim();
+        if (!src) return false;
+        if (img.complete) return img.naturalWidth > 0 || src.startsWith("data:");
+        return true;
+      });
+    })()
+  `);
 }
 
 async function getPrintersFromAnyWindow() {
@@ -1256,13 +1287,6 @@ async function printSilentHtml({ html, title }) {
     win.webContents.once("did-finish-load", async () => {
       try {
         await waitForPrintDocumentReady(win.webContents);
-        const plainText = await win.webContents.executeJavaScript(
-          `(document.body && document.body.innerText) ? document.body.innerText : ""`,
-        );
-        if (!String(plainText || "").trim()) {
-          settle({ ok: false, error: "Receipt is empty — nothing to print." });
-          return;
-        }
 
         const active = await resolveActivePrinterName();
         const chosen = active.name;
@@ -1275,6 +1299,29 @@ async function printSilentHtml({ html, title }) {
         }
         if (!active.online) {
           settle({ ok: false, error: "Printer is offline. Check USB/power." });
+          return;
+        }
+
+        const needsVisualPrint = await receiptDocumentNeedsVisualPrint(win.webContents);
+        if (needsVisualPrint) {
+          const r = await printWebContentsAsync(
+            win.webContents,
+            getThermalPrintOptions(chosen, { withImages: true }),
+            30_000,
+          );
+          if (r.ok) {
+            writeSilentPrinterNameToDb(db, chosen);
+            setPrinterVerified(db, chosen);
+          }
+          settle(r);
+          return;
+        }
+
+        const plainText = await win.webContents.executeJavaScript(
+          `(document.body && document.body.innerText) ? document.body.innerText : ""`,
+        );
+        if (!String(plainText || "").trim()) {
+          settle({ ok: false, error: "Receipt is empty — nothing to print." });
           return;
         }
 

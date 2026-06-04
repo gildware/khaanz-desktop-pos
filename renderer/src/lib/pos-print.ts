@@ -394,6 +394,12 @@ export function usePlainTextReceipt(platform?: string): boolean {
   return platform === "win32";
 }
 
+/** Bills with a logo must use HTML print so the slip matches Settings preview. */
+export function billReceiptNeedsHtmlPrint(layout?: BillPrintLayout): boolean {
+  if (layout?.showLogo === false) return false;
+  return Boolean(layout?.logoSrc?.trim());
+}
+
 export function wrapPlainTextPrintDocument(text: string, title: string): string {
   const safeTitle = escapeHtml(title || "Receipt");
   const body = escapeHtml(text);
@@ -687,15 +693,18 @@ type DesktopPrintBridge = {
 
 async function sendReceiptToDesktop(
   desktop: DesktopPrintBridge,
-  _platform: string,
+  preferPlainText: boolean,
   plainText: string,
   htmlDoc: string,
   title: string,
 ): Promise<void> {
-  if (desktop.printReceiptText) {
+  if (preferPlainText && desktop.printReceiptText) {
     const r = await desktop.printReceiptText(plainText, title);
     if (r.ok) return;
     throw new Error(r.error || "Print failed");
+  }
+  if (!desktop.printSilentHtml) {
+    throw new Error("Print failed");
   }
   const r = await desktop.printSilentHtml(htmlDoc, title);
   if (r.ok) return;
@@ -811,12 +820,17 @@ export async function printPosBillThermal(
   if (!desktop?.printSilentHtml && !desktop?.printReceiptText) return;
 
   const platform = desktop.getPlatform ? await desktop.getPlatform() : "";
-  const plain = usePlainTextReceipt(platform);
   const plainText = buildBillPlainText(options);
-  const doc = plain
-    ? wrapPlainTextPrintDocument(plainText, "Bill")
-    : wrapThermalPrintDocument(buildBillHtmlBody(options), "Bill", options.layout);
-  await sendReceiptToDesktop(desktop, platform, plainText, doc, "Bill");
+  const htmlDoc = wrapThermalPrintDocument(buildBillHtmlBody(options), "Bill", options.layout);
+  const preferPlainText =
+    usePlainTextReceipt(platform) && !billReceiptNeedsHtmlPrint(options.layout);
+  await sendReceiptToDesktop(
+    desktop,
+    preferPlainText,
+    plainText,
+    htmlDoc,
+    "Bill",
+  );
 }
 
 export async function printPosKotThermal(
@@ -829,10 +843,8 @@ export async function printPosKotThermal(
   if (!desktop?.printSilentHtml && !desktop?.printReceiptText) return;
 
   const platform = desktop.getPlatform ? await desktop.getPlatform() : "";
-  const plain = usePlainTextReceipt(platform);
   const plainText = buildKotPlainText(options);
-  const doc = plain
-    ? wrapPlainTextPrintDocument(plainText, "KOT")
-    : wrapThermalPrintDocument(buildKotHtmlBody(options), "KOT", options.layout);
-  await sendReceiptToDesktop(desktop, platform, plainText, doc, "KOT");
+  const htmlDoc = wrapThermalPrintDocument(buildKotHtmlBody(options), "KOT", options.layout);
+  const preferPlainText = usePlainTextReceipt(platform);
+  await sendReceiptToDesktop(desktop, preferPlainText, plainText, htmlDoc, "KOT");
 }

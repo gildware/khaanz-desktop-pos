@@ -41,12 +41,22 @@ function defaultThermalPrintOptions(deviceName) {
   };
 }
 
-/** @param {string} deviceName */
-function getThermalPrintOptions(deviceName) {
+/** @param {string} deviceName @param {{ withImages?: boolean }} [opts] */
+function getThermalPrintOptions(deviceName, opts = {}) {
+  const withImages = Boolean(opts.withImages);
   if (process.platform === "win32") {
-    return windowsThermalPrintOptions(deviceName);
+    const base = windowsThermalPrintOptions(deviceName);
+    if (withImages) return { ...base, printBackground: true };
+    return base;
   }
-  return defaultThermalPrintOptions(deviceName);
+  if (process.platform === "darwin") {
+    const base = darwinThermalPrintOptions(deviceName);
+    if (withImages) return { ...base, printBackground: true };
+    return base;
+  }
+  const base = defaultThermalPrintOptions(deviceName);
+  if (withImages) return { ...base, printBackground: true };
+  return base;
 }
 
 /** Hidden print window sizing — narrow on Windows for 80mm roll. */
