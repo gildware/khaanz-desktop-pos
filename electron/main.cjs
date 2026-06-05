@@ -1898,7 +1898,25 @@ async function pullSyncFromServer() {
       writeMenuPayloadJson(db, JSON.stringify(menu));
       markMenuPulledFromServer();
     }
-    if (pull.json.settings) writeSettingsJson(db, JSON.stringify(pull.json.settings));
+    if (pull.json.settings) {
+      writeSettingsJson(db, JSON.stringify(pull.json.settings));
+      const synced = pull.json.settings;
+      if (synced.billPreview && typeof synced.billPreview === "object") {
+        let localLogo = "";
+        try {
+          const prevRaw = readBillPreviewSettingsJson(db);
+          const prev = prevRaw ? JSON.parse(prevRaw) : null;
+          if (prev && typeof prev.logoDataUrl === "string" && prev.logoDataUrl.trim()) {
+            localLogo = prev.logoDataUrl.trim();
+          }
+        } catch {
+          /* keep server bill preview */
+        }
+        const merged = { ...defaultBillPreviewSettings(), ...synced.billPreview };
+        if (localLogo) merged.logoDataUrl = localLogo;
+        writeBillPreviewSettingsJson(db, JSON.stringify(merged));
+      }
+    }
     if (Array.isArray(pull.json.recentOrders)) {
       writeRemoteOrdersJson(db, JSON.stringify(pull.json.recentOrders));
     }
