@@ -8,6 +8,35 @@ export const ORDER_STATUS_LABEL: Record<string, string> = {
   CREATED: "Created",
 };
 
+/** Tab labels for in-restaurant (POS) orders. */
+export const RESTAURANT_ORDER_STATUS_TAB_LABEL: Record<string, string> = {
+  PENDING: "Pending",
+  ACCEPTED: "Accepted",
+  PREPARING: "Preparing",
+  OUT_FOR_DELIVERY: "Ready",
+  DELIVERED: "Completed",
+  CANCELLED: "Cancelled",
+};
+
+/** Status badge text for in-restaurant orders (fulfillment-aware). */
+export function restaurantOrderStatusLabel(
+  status: string,
+  fulfillment: string,
+): string {
+  switch (status) {
+    case "OUT_FOR_DELIVERY":
+      if (fulfillment === "dine_in") return "Ready to serve";
+      if (fulfillment === "pickup") return "Ready for pickup";
+      return ORDER_STATUS_LABEL.OUT_FOR_DELIVERY;
+    case "DELIVERED":
+      if (fulfillment === "dine_in") return "Served";
+      if (fulfillment === "pickup") return "Picked up";
+      return ORDER_STATUS_LABEL.DELIVERED;
+    default:
+      return ORDER_STATUS_LABEL[status] ?? status;
+  }
+}
+
 export function orderStatusBadgeClassName(status: string): string {
   switch (status) {
     case "PENDING":
@@ -29,6 +58,33 @@ export function orderStatusBadgeClassName(status: string): string {
 
 export function statusLabelFor(status: string): string {
   return ORDER_STATUS_LABEL[status] ?? status;
+}
+
+/** Map legacy/local statuses onto workflow tabs. */
+export function normalizeOrderStatus(status: string): string {
+  const upper = String(status || "").trim().toUpperCase();
+  if (upper === "CREATED") return "PENDING";
+  return upper;
+}
+
+export function filterOrdersByStatusTab<T extends { status: string }>(
+  orders: T[],
+  tab: string,
+): T[] {
+  if (tab === "all") return orders;
+  return orders.filter((o) => normalizeOrderStatus(o.status) === tab);
+}
+
+export function countOrdersByStatus(orders: { status: string }[]): {
+  total: number;
+  byStatus: Record<string, number>;
+} {
+  const byStatus: Record<string, number> = {};
+  for (const o of orders) {
+    const key = normalizeOrderStatus(o.status);
+    byStatus[key] = (byStatus[key] ?? 0) + 1;
+  }
+  return { total: orders.length, byStatus };
 }
 
 export function nextOrderStep(

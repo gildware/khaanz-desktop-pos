@@ -337,6 +337,146 @@ function isTodayInIst(isoString, now) {
   return d.getTime() >= start && d.getTime() < end;
 }
 
+function formatIstDateInput(now) {
+  const { y, m, d: day } = istDateParts(now instanceof Date ? now : new Date());
+  return `${y}-${m}-${day}`;
+}
+
+function parseIstDateInput(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const d = new Date(`${value}T00:00:00+05:30`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function isOrderOnIstDate(isoString, dayStart) {
+  const d = new Date(isoString);
+  if (Number.isNaN(d.getTime())) return false;
+  const end = dayStart.getTime() + 24 * 60 * 60 * 1000;
+  return d.getTime() >= dayStart.getTime() && d.getTime() < end;
+}
+
+function normalizeOrderStatusValue(status) {
+  const upper = String(status || "").trim().toUpperCase();
+  return upper === "CREATED" ? "PENDING" : upper;
+}
+
+function normalizeOrderRow(row) {
+  if (!row || typeof row !== "object") return row;
+  return { ...row, status: normalizeOrderStatusValue(row.status) };
+}
+
+function normalizeOrderRows(rows) {
+  return Array.isArray(rows) ? rows.map(normalizeOrderRow) : [];
+}
+
+function buildLocalPosOrderRows() {
+  const offline = db
+    .prepare(
+      "SELECT client_order_id AS clientOrderId, body_json AS bodyJson, created_at AS createdAt FROM offline_pos_queue ORDER BY created_at DESC LIMIT 100",
+    )
+    .all();
+
+  const local = db
+    .prepare(
+      "SELECT id, client_order_id AS clientOrderId, status, total_cents AS totalCents, created_at AS createdAt, synced_at AS syncedAt, fulfillment FROM orders ORDER BY created_at DESC LIMIT 100",
+    )
+    .all();
+
+  const rows = [];
+  const seen = new Set();
+
+  for (const r of offline) {
+    let customerPhone = "";
+    let customerName = null;
+    let fulfillment = "pickup";
+    let dineInTable = "";
+    let totalMinor = 0;
+    let lines = [];
+    try {
+      const body = JSON.parse(r.bodyJson);
+      if (body && typeof body === "object") {
+        const b = body;
+        if (typeof b.phone === "string") customerPhone = b.phone;
+        if (typeof b.customerName === "string") customerName = b.customerName;
+        if (typeof b.fulfillment === "string") fulfillment = b.fulfillment;
+        if (typeof b.tableId === "string") dineInTable = b.tableId;
+        if (Array.isArray(b.lines)) {
+          lines = b.lines.map((payload, sortIndex) => ({ sortIndex, payload }));
+          totalMinor = b.lines.reduce((s, l) => {
+            if (!l || typeof l !== "object") return s;
+            const unit = Number(l.unitPrice || 0);
+            const qty = Number(l.quantity || 0);
+            if (!Number.isFinite(unit) || !Number.isFinite(qty)) return s;
+            return s + Math.round(unit * qty * 100);
+          }, 0);
+          const deliveryMinor =
+            typeof b.deliveryChargeMinor === "number" && Number.isFinite(b.deliveryChargeMinor)
+              ? Math.max(0, Math.round(b.deliveryChargeMinor))
+              : 0;
+          const discountMinor =
+            typeof b.discountMinor === "number" && Number.isFinite(b.discountMinor)
+              ? Math.max(0, Math.round(b.discountMinor))
+              : 0;
+          totalMinor += deliveryMinor;
+          totalMinor = Math.max(0, totalMinor - Math.min(discountMinor, totalMinor));
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    seen.add(r.clientOrderId);
+    rows.push({
+      id: r.clientOrderId,
+      orderRef: offlineRefForClientOrderId(r.clientOrderId),
+      status: "PENDING",
+      statusLabel: "Offline",
+      fulfillment,
+      totalMinor,
+      currency: "INR",
+      createdAt: r.createdAt,
+      customerName,
+      customerPhone,
+      source: "desktop_offline",
+      dineInTable,
+      lines,
+    });
+  }
+
+  for (const o of local) {
+    if (seen.has(o.clientOrderId) || seen.has(o.id)) continue;
+    seen.add(o.clientOrderId);
+    seen.add(o.id);
+    rows.push({
+      id: o.id,
+      orderRef: String(o.clientOrderId).slice(0, 8).toUpperCase(),
+      status: String(o.status || "created").toUpperCase(),
+      statusLabel: o.syncedAt ? "Synced" : "Local",
+      fulfillment: o.fulfillment || "pickup",
+      totalMinor: Number(o.totalCents || 0),
+      currency: "INR",
+      createdAt: o.createdAt,
+      customerName: null,
+      customerPhone: "",
+      source: "desktop_local",
+      dineInTable: "",
+      lines: [],
+    });
+  }
+
+  return rows;
+}
+
+function readCachedRemoteOrders() {
+  const rawRemote = readRemoteOrdersJson(db);
+  if (!rawRemote) return [];
+  try {
+    const j = JSON.parse(rawRemote);
+    return Array.isArray(j) ? j : [];
+  } catch {
+    return [];
+  }
+}
+
 function formatIstHourLabel(hour) {
   const h = ((Number(hour) % 24) + 24) % 24;
   if (h === 0) return "12 AM";
@@ -1542,7 +1682,7 @@ function createMainWindow() {
     height: 800,
     minWidth: 900,
     minHeight: 600,
-    title: "Khaanz POS (Offline)",
+    title: "Khaanz POS",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -2189,108 +2329,14 @@ function registerIpc() {
 
   ipcMain.handle("khaanz:pos-list-recent-orders", async () => {
     try {
-      const offline = db
-        .prepare(
-          "SELECT client_order_id AS clientOrderId, body_json AS bodyJson, created_at AS createdAt FROM offline_pos_queue ORDER BY created_at DESC LIMIT 100",
-        )
-        .all();
-
-      const local = db
-        .prepare(
-          "SELECT id, client_order_id AS clientOrderId, status, total_cents AS totalCents, created_at AS createdAt, synced_at AS syncedAt, fulfillment FROM orders ORDER BY created_at DESC LIMIT 100",
-        )
-        .all();
-
-      let remote = [];
-      const rawRemote = readRemoteOrdersJson(db);
-      if (rawRemote) {
-        try {
-          const j = JSON.parse(rawRemote);
-          if (Array.isArray(j)) remote = j;
-        } catch {
-          /* ignore */
-        }
-      }
-
+      const localRows = buildLocalPosOrderRows();
+      const remote = readCachedRemoteOrders();
       const seen = new Set();
       const rows = [];
 
-      for (const r of offline) {
-        let customerPhone = "";
-        let customerName = null;
-        let fulfillment = "pickup";
-        let dineInTable = "";
-        let totalMinor = 0;
-        let lines = [];
-        try {
-          const body = JSON.parse(r.bodyJson);
-          if (body && typeof body === "object") {
-            const b = body;
-            if (typeof b.phone === "string") customerPhone = b.phone;
-            if (typeof b.customerName === "string") customerName = b.customerName;
-            if (typeof b.fulfillment === "string") fulfillment = b.fulfillment;
-            if (typeof b.tableId === "string") dineInTable = b.tableId;
-            if (Array.isArray(b.lines)) {
-              lines = b.lines.map((payload, sortIndex) => ({ sortIndex, payload }));
-              totalMinor = b.lines.reduce((s, l) => {
-                if (!l || typeof l !== "object") return s;
-                const unit = Number(l.unitPrice || 0);
-                const qty = Number(l.quantity || 0);
-                if (!Number.isFinite(unit) || !Number.isFinite(qty)) return s;
-                return s + Math.round(unit * qty * 100);
-              }, 0);
-              const deliveryMinor =
-                typeof b.deliveryChargeMinor === "number" && Number.isFinite(b.deliveryChargeMinor)
-                  ? Math.max(0, Math.round(b.deliveryChargeMinor))
-                  : 0;
-              const discountMinor =
-                typeof b.discountMinor === "number" && Number.isFinite(b.discountMinor)
-                  ? Math.max(0, Math.round(b.discountMinor))
-                  : 0;
-              totalMinor += deliveryMinor;
-              totalMinor = Math.max(0, totalMinor - Math.min(discountMinor, totalMinor));
-            }
-          }
-        } catch {
-          /* ignore */
-        }
-        seen.add(r.clientOrderId);
-        rows.push({
-          id: r.clientOrderId,
-          orderRef: offlineRefForClientOrderId(r.clientOrderId),
-          status: "PENDING",
-          statusLabel: "Offline",
-          fulfillment,
-          totalMinor,
-          currency: "INR",
-          createdAt: r.createdAt,
-          customerName,
-          customerPhone,
-          source: "desktop_offline",
-          dineInTable,
-          lines,
-        });
-      }
-
-      for (const o of local) {
-        if (seen.has(o.clientOrderId) || seen.has(o.id)) continue;
-        seen.add(o.clientOrderId);
-        seen.add(o.id);
-        rows.push({
-          id: o.id,
-          orderRef: String(o.clientOrderId).slice(0, 8).toUpperCase(),
-          status: String(o.status || "created").toUpperCase(),
-          statusLabel: o.syncedAt ? "Synced" : "Local",
-          fulfillment: o.fulfillment || "pickup",
-          totalMinor: Number(o.totalCents || 0),
-          currency: "INR",
-          createdAt: o.createdAt,
-          customerName: null,
-          customerPhone: "",
-          source: "desktop_local",
-          dineInTable: "",
-          lines: [],
-        });
+      for (const o of localRows) {
+        seen.add(String(o.id));
+        rows.push(o);
       }
 
       for (const o of remote) {
@@ -2304,6 +2350,113 @@ function registerIpc() {
       rows.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
 
       return { ok: true, orders: rows.slice(0, 100) };
+    } catch (e) {
+      return { ok: false, error: String(e && e.message ? e.message : e) };
+    }
+  });
+
+  ipcMain.handle("khaanz:pos-list-orders", async (_evt, { view, date }) => {
+    try {
+      const viewKey = view === "online" ? "online" : "exclude_online_pending";
+      const dateStr =
+        typeof date === "string" && date.trim()
+          ? date.trim()
+          : formatIstDateInput(new Date());
+      const dayStart = parseIstDateInput(dateStr) || istStartOfDay(new Date());
+
+      const apiOrigin = (process.env.KHAANZ_API_ORIGIN || "").trim();
+      const syncKey = (process.env.KHAANZ_SYNC_KEY || "").trim();
+      const deviceId = getOrCreateDeviceId(db);
+
+      let serverOrders = [];
+      let liveApi = false;
+      if (apiOrigin && syncKey) {
+        const params = new URLSearchParams({
+          view: viewKey,
+          date: dateStr,
+          limit: "100",
+        });
+        const resp = await fetchJson(
+          `${apiOrigin.replace(/\/$/, "")}/api/pos-sync/orders?${params.toString()}`,
+          {
+            method: "GET",
+            headers: {
+              "x-pos-device-id": deviceId,
+              "x-pos-sync-key": syncKey,
+            },
+          },
+        );
+        if (resp.ok && resp.json && Array.isArray(resp.json.orders)) {
+          serverOrders = resp.json.orders;
+          liveApi = true;
+        }
+      }
+
+      // When the orders API is unavailable (older server) refresh the pull cache first.
+      if (!liveApi && apiOrigin && syncKey) {
+        await pullSyncFromServer();
+      }
+
+      if (viewKey === "online") {
+        if (liveApi) {
+          return {
+            ok: true,
+            orders: normalizeOrderRows(serverOrders),
+            date: dateStr,
+          };
+        }
+        const cached = normalizeOrderRows(
+          readCachedRemoteOrders().filter(
+            (o) =>
+              o &&
+              typeof o === "object" &&
+              o.source === "website" &&
+              isOrderOnIstDate(String(o.createdAt || ""), dayStart),
+          ),
+        );
+        cached.sort((a, b) =>
+          String(b.createdAt || "").localeCompare(String(a.createdAt || "")),
+        );
+        return {
+          ok: true,
+          orders: cached.slice(0, 100),
+          date: dateStr,
+          stale: cached.length === 0,
+        };
+      }
+
+      // Recent / POS orders: merge local device rows with server POS orders.
+      const localRows = normalizeOrderRows(
+        buildLocalPosOrderRows().filter((o) =>
+          isOrderOnIstDate(String(o.createdAt || ""), dayStart),
+        ),
+      );
+      const seen = new Set(localRows.map((o) => String(o.id)));
+      const merged = [...localRows];
+
+      const remotePos = normalizeOrderRows(
+        liveApi && serverOrders.length > 0
+          ? serverOrders
+          : readCachedRemoteOrders().filter(
+              (o) =>
+                o &&
+                typeof o === "object" &&
+                o.source !== "website" &&
+                isOrderOnIstDate(String(o.createdAt || ""), dayStart),
+            ),
+      );
+
+      for (const o of remotePos) {
+        const id = o.id || o.clientOrderId;
+        if (id && seen.has(String(id))) continue;
+        if (id) seen.add(String(id));
+        merged.push(o);
+      }
+
+      merged.sort((a, b) =>
+        String(b.createdAt || "").localeCompare(String(a.createdAt || "")),
+      );
+      return { ok: true, orders: merged.slice(0, 100), date: dateStr };
     } catch (e) {
       return { ok: false, error: String(e && e.message ? e.message : e) };
     }

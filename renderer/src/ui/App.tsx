@@ -34,7 +34,7 @@ import {
   printPosBillThermal,
   printPosKotThermal,
 } from "../lib/pos-print";
-import { withIpcTimeout } from "../lib/ipc-timeout";
+import { formatLastSyncAt } from "../lib/ist-dates";
 import type {
   CartAddonWithQty,
   CartItemLine,
@@ -196,7 +196,9 @@ export function App() {
   const [syncing, setSyncing] = useState(false);
   const [isOnline, setIsOnline] = useState<boolean | null>(null);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
-  const [mainTab, setMainTab] = useState<"pos" | "orders" | "reports" | "settings">("pos");
+  const [mainTab, setMainTab] = useState<
+    "pos" | "recent-orders" | "online-orders" | "reports" | "settings"
+  >("pos");
   const [fulfillment, setFulfillment] = useState<FulfillmentMode>("pickup");
   const [customerName, setCustomerName] = useState("");
   const [phone, setPhone] = useState("");
@@ -751,7 +753,7 @@ export function App() {
       if (r.ok && "lastMenuPullAt" in r && r.lastMenuPullAt) {
         setBoot((prev) => (prev ? { ...prev, lastMenuPullAt: r.lastMenuPullAt ?? null } : prev));
       }
-      setNotice("Menu and orders synced.");
+      setNotice("Data synced.");
     } finally {
       setSyncing(false);
     }
@@ -985,6 +987,8 @@ export function App() {
       ? "Printer disconnected"
       : "No printer";
 
+  const lastSyncLabel = formatLastSyncAt(boot?.lastMenuPullAt);
+
   if (!session) {
     const needsServer = !boot?.syncConfigured || showServerSetup;
     const loginOnline = isOnline === true;
@@ -1121,7 +1125,7 @@ export function App() {
             {isOnline === null ? "Checking…" : isOnline ? "Online" : "Offline"}
           </span>
           <span
-            className={`hidden items-center gap-1 rounded-full px-2.5 py-1 text-xs sm:inline-flex ${
+            className={`hidden items-center gap-1 rounded-full px-2.5 py-1 text-xs whitespace-nowrap sm:inline-flex ${
               pendingSyncCount > 0
                 ? "bg-amber-500/10 text-amber-800"
                 : "bg-emerald-500/10 text-emerald-700"
@@ -1129,13 +1133,13 @@ export function App() {
           >
             {pendingSyncCount > 0 ? (
               <>
-                <RefreshCwIcon className="size-3.5" />
+                <RefreshCwIcon className="size-3.5 shrink-0" />
                 Pending sync
               </>
             ) : (
               <>
-                <CheckCircle2Icon className="size-3.5" />
-                Synced
+                <CheckCircle2Icon className="size-3.5 shrink-0" />
+                {lastSyncLabel ?? "Synced"}
               </>
             )}
           </span>
@@ -1152,7 +1156,7 @@ export function App() {
               ) : (
                 <RefreshCwIcon className="size-4" />
               )}
-              Sync menu
+              Sync data
             </button>
           ) : null}
           <button
@@ -1197,7 +1201,7 @@ export function App() {
       ) : !boot?.lastMenuPullAt ? (
         <div className="border-b bg-amber-500/10 px-4 py-2 text-amber-950 text-sm dark:text-amber-100">
           Connected to <span className="font-medium">{boot.apiOrigin}</span> — tap{" "}
-          <strong>Sync menu</strong> or <strong>Settings</strong> to refresh from the server.
+          <strong>Sync data</strong> or <strong>Settings</strong> to refresh from the server.
         </div>
       ) : null}
 
@@ -1231,14 +1235,25 @@ export function App() {
         </button>
         <button
           type="button"
-          onClick={() => setMainTab("orders")}
+          onClick={() => setMainTab("recent-orders")}
           className={`inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-md px-4 font-medium text-sm transition-colors ${
-            mainTab === "orders"
+            mainTab === "recent-orders"
               ? "bg-background text-foreground shadow-sm ring-1 ring-border/80"
               : "text-muted-foreground hover:text-foreground"
           }`}
         >
           Recent orders
+        </button>
+        <button
+          type="button"
+          onClick={() => setMainTab("online-orders")}
+          className={`inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-md px-4 font-medium text-sm transition-colors ${
+            mainTab === "online-orders"
+              ? "bg-background text-foreground shadow-sm ring-1 ring-border/80"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Online orders
         </button>
         <button
           type="button"
@@ -1277,8 +1292,18 @@ export function App() {
         </div>
       ) : null}
 
-      {mainTab === "orders" ? (
+      {mainTab === "recent-orders" ? (
         <RecentOrdersPanel
+          orderView="recent"
+          sessionId={session.id}
+          refreshKey={ordersRefreshKey}
+          posSettings={posSettings}
+          billPrintLayout={billPrintLayout}
+          printerConnected={printerConnected}
+        />
+      ) : mainTab === "online-orders" ? (
+        <RecentOrdersPanel
+          orderView="online"
           sessionId={session.id}
           refreshKey={ordersRefreshKey}
           posSettings={posSettings}
@@ -1410,7 +1435,7 @@ export function App() {
                   {filteredCombos.length === 0 ? (
                     <p className="mt-4 text-center text-muted-foreground text-sm">
                       {menuCombos.length === 0
-                        ? "No combos in cache. Use Sync menu when online."
+                        ? "No combos in cache. Use Sync data when online."
                         : isMenuSearching
                           ? "No combos match your search."
                           : "No combos available right now."}
@@ -1456,7 +1481,7 @@ export function App() {
                 {filteredMenu.length === 0 ? (
                   <p className="mt-4 text-center text-muted-foreground text-sm">
                     {menuItems.length === 0
-                      ? "No menu items in cache. Use Sync when online, or seed data locally."
+                      ? "No menu items in cache. Use Sync data when online, or seed data locally."
                       : isMenuSearching
                         ? "No items match your search."
                         : "No items in this category."}

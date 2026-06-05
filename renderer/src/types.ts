@@ -312,6 +312,13 @@ export type KhaanzDesktopApi = {
   listRecentPosOrders: () => Promise<
     { ok: true; orders: RecentOrderRow[] } | { ok: false; error: string }
   >;
+  listPosOrders: (opts: {
+    view: "online" | "recent";
+    date: string;
+  }) => Promise<
+    | { ok: true; orders: RecentOrderRow[]; date?: string; stale?: boolean }
+    | { ok: false; error: string }
+  >;
   getTodaySalesReport: () => Promise<
     { ok: true; report: TodaySalesReport } | { ok: false; error: string }
   >;

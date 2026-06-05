@@ -7,7 +7,18 @@ import {
   printPosKotThermal,
   receiptLineToKotLine,
 } from "../lib/pos-print";
-import { nextOrderStep, orderStatusBadgeClassName, statusLabelFor } from "../lib/order-status";
+import { formatIstDateInput, isOrderOnIstDate, parseIstDateInput } from "../lib/ist-dates";
+import {
+  countOrdersByStatus,
+  filterOrdersByStatusTab,
+  nextOrderStep,
+  normalizeOrderStatus,
+  ORDER_STATUS_LABEL,
+  orderStatusBadgeClassName,
+  RESTAURANT_ORDER_STATUS_TAB_LABEL,
+  restaurantOrderStatusLabel,
+  statusLabelFor,
+} from "../lib/order-status";
 import type { BillPrintLayout } from "../lib/bill-preview-settings";
 import type { PosSettings, RecentOrderRow } from "../types";
 import { OrderLineView } from "./OrderLineView";
@@ -16,21 +27,57 @@ import {
   type OrderStatusConfirmPayload,
 } from "./OrderStatusConfirmDialog";
 
-const ORDER_STATUS_TABS = [
-  { id: "all", label: "All" },
-  { id: "PENDING", label: "Pending" },
-  { id: "ACCEPTED", label: "Accepted" },
-  { id: "PREPARING", label: "Preparing" },
-  { id: "OUT_FOR_DELIVERY", label: "Out for delivery" },
-  { id: "DELIVERED", label: "Delivered" },
-  { id: "CANCELLED", label: "Cancelled" },
-] as const;
-
-type StatusFilter = (typeof ORDER_STATUS_TABS)[number]["id"];
-
+const AUTO_REFRESH_MS = 15_000;
 const PRINT_COOLDOWN_MS = 5000;
 
+type OrderView = "recent" | "online";
+
+type StatusFilter = "all" | string;
+
+const RECENT_STATUS_TABS: { id: StatusFilter; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "PENDING", label: RESTAURANT_ORDER_STATUS_TAB_LABEL.PENDING },
+  { id: "ACCEPTED", label: RESTAURANT_ORDER_STATUS_TAB_LABEL.ACCEPTED },
+  { id: "PREPARING", label: RESTAURANT_ORDER_STATUS_TAB_LABEL.PREPARING },
+  { id: "OUT_FOR_DELIVERY", label: RESTAURANT_ORDER_STATUS_TAB_LABEL.OUT_FOR_DELIVERY },
+  { id: "DELIVERED", label: RESTAURANT_ORDER_STATUS_TAB_LABEL.DELIVERED },
+  { id: "CANCELLED", label: RESTAURANT_ORDER_STATUS_TAB_LABEL.CANCELLED },
+];
+
+const ONLINE_STATUS_TABS: { id: StatusFilter; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "PENDING", label: ORDER_STATUS_LABEL.PENDING },
+  { id: "ACCEPTED", label: ORDER_STATUS_LABEL.ACCEPTED },
+  { id: "PREPARING", label: ORDER_STATUS_LABEL.PREPARING },
+  { id: "OUT_FOR_DELIVERY", label: ORDER_STATUS_LABEL.OUT_FOR_DELIVERY },
+  { id: "DELIVERED", label: ORDER_STATUS_LABEL.DELIVERED },
+  { id: "CANCELLED", label: ORDER_STATUS_LABEL.CANCELLED },
+];
+
+function normalizeOrderRows(rows: RecentOrderRow[]): RecentOrderRow[] {
+  return rows.map((o) => ({
+    ...o,
+    status: normalizeOrderStatus(o.status),
+  }));
+}
+
+function defaultStatusFilter(_view: OrderView): StatusFilter {
+  return "all";
+}
+
+function displayStatusLabel(o: RecentOrderRow, view: OrderView): string {
+  if (o.source === "desktop_offline") return "Offline";
+  if (o.source === "desktop_local") return o.statusLabel || "Local";
+  if (view === "online") {
+    return o.status === "PENDING"
+      ? `New · ${o.statusLabel || statusLabelFor(o.status)}`
+      : o.statusLabel || statusLabelFor(o.status);
+  }
+  return restaurantOrderStatusLabel(o.status, o.fulfillment);
+}
+
 type Props = {
+  orderView: OrderView;
   sessionId: string;
   refreshKey?: number;
   posSettings: PosSettings | null;
@@ -39,6 +86,7 @@ type Props = {
 };
 
 export function RecentOrdersPanel({
+  orderView,
   sessionId,
   refreshKey = 0,
   posSettings,
@@ -48,17 +96,25 @@ export function RecentOrdersPanel({
   const api = window.posDesktop;
   const desktop = window.khaanzDesktop;
 
+  const [orderDate, setOrderDate] = useState(() => formatIstDateInput(new Date()));
+  const todayIst = formatIstDateInput(new Date());
+  const viewingToday = orderDate === todayIst;
+
   const [initialLoad, setInitialLoad] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [orders, setOrders] = useState<RecentOrderRow[]>([]);
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() =>
+    defaultStatusFilter(orderView),
+  );
+  const [autoRefresh, setAutoRefresh] = useState(true);
   const [error, setError] = useState("");
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [statusConfirm, setStatusConfirm] = useState<OrderStatusConfirmPayload | null>(
     null,
   );
-  /** orderId → cooldown end timestamp (ms) */
   const [printCooldownUntil, setPrintCooldownUntil] = useState<Record<string, number>>({});
+
+  const statusTabs = orderView === "online" ? ONLINE_STATUS_TABS : RECENT_STATUS_TABS;
 
   const isOrderPrintOnCooldown = useCallback(
     (orderId: string) => {
@@ -82,14 +138,39 @@ export function RecentOrdersPanel({
 
   const loadOrders = useCallback(async () => {
     setError("");
+    const dayStart = parseIstDateInput(orderDate);
     try {
+      if (desktop?.listPosOrders) {
+        const out = await desktop.listPosOrders({ view: orderView, date: orderDate });
+        if (!out.ok) {
+          setError(out.error);
+          return;
+        }
+        const rows = normalizeOrderRows(Array.isArray(out.orders) ? out.orders : []);
+        setOrders(rows);
+        if (orderView === "online" && out.stale && rows.length === 0) {
+          setError(
+            "No online orders loaded. Tap Sync data, or update the server app if this persists.",
+          );
+        }
+        return;
+      }
       if (desktop?.listRecentPosOrders) {
         const out = await desktop.listRecentPosOrders();
         if (!out.ok) {
           setError(out.error);
           return;
         }
-        setOrders(Array.isArray(out.orders) ? out.orders : []);
+        let rows = normalizeOrderRows(Array.isArray(out.orders) ? out.orders : []);
+        if (orderView === "online") {
+          rows = rows.filter((o) => o.source === "website");
+        } else {
+          rows = rows.filter((o) => o.source !== "website");
+        }
+        if (dayStart) {
+          rows = rows.filter((o) => isOrderOnIstDate(o.createdAt, dayStart));
+        }
+        setOrders(rows);
         return;
       }
       const local = await api.listRecentOrders(sessionId, 100);
@@ -97,7 +178,7 @@ export function RecentOrdersPanel({
         setError(local.error);
         return;
       }
-      setOrders(
+      let rows = normalizeOrderRows(
         local.orders.map((o) => ({
           id: o.id,
           orderRef: o.clientOrderId.slice(0, 8).toUpperCase(),
@@ -114,33 +195,49 @@ export function RecentOrdersPanel({
           lines: [],
         })),
       );
+      if (dayStart) {
+        rows = rows.filter((o) => isOrderOnIstDate(o.createdAt, dayStart));
+      }
+      setOrders(orderView === "online" ? [] : rows);
     } finally {
       setInitialLoad(false);
       setRefreshing(false);
     }
-  }, [api, desktop, sessionId]);
+  }, [api, desktop, orderDate, orderView, sessionId]);
+
+  useEffect(() => {
+    setStatusFilter(defaultStatusFilter(orderView));
+  }, [orderView]);
 
   useEffect(() => {
     void loadOrders();
   }, [loadOrders, refreshKey]);
 
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const id = window.setInterval(() => {
+      void loadOrders();
+    }, AUTO_REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, [autoRefresh, loadOrders]);
+
   const refreshOrders = useCallback(async () => {
     setRefreshing(true);
-    await loadOrders();
-  }, [loadOrders]);
-
-  const statusCounts = useMemo(() => {
-    const byStatus: Record<string, number> = {};
-    for (const o of orders) {
-      byStatus[o.status] = (byStatus[o.status] ?? 0) + 1;
+    if (desktop?.syncNow) {
+      await desktop.syncNow().catch(() => {});
     }
-    return { total: orders.length, byStatus };
-  }, [orders]);
+    await loadOrders();
+  }, [desktop, loadOrders]);
 
-  const filteredOrders = useMemo(() => {
-    if (statusFilter === "all") return orders;
-    return orders.filter((o) => o.status === statusFilter);
-  }, [orders, statusFilter]);
+  const statusCounts = useMemo(
+    () => countOrdersByStatus(orders),
+    [orders],
+  );
+
+  const filteredOrders = useMemo(
+    () => filterOrdersByStatusTab(orders, statusFilter),
+    [orders, statusFilter],
+  );
 
   const requestStatusChange = useCallback((payload: OrderStatusConfirmPayload) => {
     setStatusConfirm(payload);
@@ -245,24 +342,55 @@ export function RecentOrdersPanel({
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-3">
       <div className="flex shrink-0 flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="font-semibold text-lg">Orders</h2>
+          <h2 className="font-semibold text-lg">
+            {orderView === "online" ? "Online orders" : "Recent orders"}
+          </h2>
           <p className="text-muted-foreground text-xs">
-            Recent orders from this device and synced from the server.
+            {orderView === "online"
+              ? "Website orders for the selected date."
+              : "POS and dine-in orders from this device and server."}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => void refreshOrders()}
-          disabled={refreshing}
-          className="inline-flex h-9 items-center gap-2 rounded-md border px-3 text-sm disabled:opacity-50"
-        >
-          {refreshing ? <Loader2Icon className="size-4 animate-spin" /> : null}
-          Refresh now
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-1.5 text-sm">
+            <input
+              type="checkbox"
+              checked={autoRefresh}
+              onChange={(e) => setAutoRefresh(e.target.checked)}
+              className="size-3.5 rounded border"
+            />
+            Auto (15s)
+          </label>
+          <input
+            type="date"
+            value={orderDate}
+            onChange={(e) => setOrderDate(e.target.value)}
+            className="h-9 rounded-md border bg-background px-2 text-sm"
+            aria-label="Order date"
+          />
+          {!viewingToday ? (
+            <button
+              type="button"
+              onClick={() => setOrderDate(todayIst)}
+              className="inline-flex h-9 items-center rounded-md border px-3 text-sm"
+            >
+              Today
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => void refreshOrders()}
+            disabled={refreshing}
+            className="inline-flex h-9 items-center gap-2 rounded-md border px-3 text-sm disabled:opacity-50"
+          >
+            {refreshing ? <Loader2Icon className="size-4 animate-spin" /> : null}
+            Refresh
+          </button>
+        </div>
       </div>
 
       <div className="flex shrink-0 gap-2 overflow-x-auto pb-1">
-        {ORDER_STATUS_TABS.map((tab) => {
+        {statusTabs.map((tab) => {
           const count =
             tab.id === "all" ? statusCounts.total : (statusCounts.byStatus[tab.id] ?? 0);
           const active = statusFilter === tab.id;
@@ -298,11 +426,14 @@ export function RecentOrdersPanel({
       <div className="min-h-0 flex-1 overflow-y-auto">
         {orders.length === 0 ? (
           <div className="rounded-2xl border border-dashed bg-muted/20 px-4 py-12 text-center text-muted-foreground text-sm">
-            No orders yet.
+            {viewingToday
+              ? `No ${orderView === "online" ? "online" : ""} orders today.`
+              : `No orders on ${orderDate}.`}
           </div>
         ) : filteredOrders.length === 0 ? (
           <div className="rounded-2xl border border-dashed bg-muted/20 px-4 py-12 text-center text-muted-foreground text-sm">
-            No orders in this status.
+            No orders in this status
+            {viewingToday ? " today" : ` on ${orderDate}`}.
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -313,15 +444,20 @@ export function RecentOrdersPanel({
               const isOfflineOnly = o.source === "desktop_offline";
               const canUpdateStatus = !isOfflineOnly && Boolean(desktop?.updatePosOrderStatus);
               const isUpdating = updatingId === o.id;
+              const isPendingOnline = orderView === "online" && o.status === "PENDING";
               const lines = o.lines ?? [];
               const canPrintWhole = orderLinePayloadsToReceiptLines(lines).length > 0;
               const printOnCooldown = isOrderPrintOnCooldown(o.id);
               const printButtonsDisabled =
                 !canPrintWhole || !printerConnected || printOnCooldown;
+              const badgeLabel = displayStatusLabel(o, orderView);
+
               return (
                 <article
                   key={o.id}
-                  className="flex h-[min(340px,42dvh)] min-h-[260px] flex-col overflow-hidden rounded-xl border bg-card p-3 shadow-sm"
+                  className={`flex h-[min(340px,42dvh)] min-h-[260px] flex-col overflow-hidden rounded-xl border bg-card p-3 shadow-sm ${
+                    isPendingOnline ? "ring-1 ring-amber-500/30" : ""
+                  }`}
                 >
                   <div className="flex shrink-0 items-start justify-between gap-2 border-b border-border/70 pb-2">
                     <div className="min-w-0 flex-1 space-y-0.5">
@@ -332,7 +468,7 @@ export function RecentOrdersPanel({
                         <span
                           className={`rounded border px-1.5 py-0.5 text-[10px] font-medium ${orderStatusBadgeClassName(o.status)}`}
                         >
-                          {o.statusLabel}
+                          {badgeLabel}
                         </span>
                       </div>
                       <p className="text-muted-foreground text-[10px] tabular-nums leading-tight">
@@ -401,7 +537,7 @@ export function RecentOrdersPanel({
                         Both
                       </button>
                     </div>
-                    {(step || canCancel) ? (
+                    {step || canCancel ? (
                       <div className="flex flex-wrap justify-center gap-1 border-t border-border/60 pt-2">
                         {step ? (
                           <button
@@ -416,9 +552,15 @@ export function RecentOrdersPanel({
                               requestStatusChange({
                                 orderId: o.id,
                                 orderRef: o.orderRef ?? o.id.slice(0, 8),
-                                currentStatusLabel: o.statusLabel || statusLabelFor(o.status),
+                                currentStatusLabel: badgeLabel,
                                 nextStatus: step.nextStatus,
-                                nextStatusLabel: statusLabelFor(step.nextStatus),
+                                nextStatusLabel:
+                                  orderView === "online"
+                                    ? statusLabelFor(step.nextStatus)
+                                    : restaurantOrderStatusLabel(
+                                        step.nextStatus,
+                                        o.fulfillment,
+                                      ),
                                 actionLabel: step.label,
                               })
                             }
@@ -444,9 +586,12 @@ export function RecentOrdersPanel({
                               requestStatusChange({
                                 orderId: o.id,
                                 orderRef: o.orderRef ?? o.id.slice(0, 8),
-                                currentStatusLabel: o.statusLabel || statusLabelFor(o.status),
+                                currentStatusLabel: badgeLabel,
                                 nextStatus: "CANCELLED",
-                                nextStatusLabel: statusLabelFor("CANCELLED"),
+                                nextStatusLabel:
+                                  orderView === "online"
+                                    ? statusLabelFor("CANCELLED")
+                                    : RESTAURANT_ORDER_STATUS_TAB_LABEL.CANCELLED,
                                 actionLabel: "Cancel order",
                                 destructive: true,
                               })
