@@ -1,5 +1,24 @@
 /** Pick the best available OS printer queue — any connected physical printer. */
 
+/** Loose match for Electron display name vs CUPS queue name (spaces, _, punctuation). */
+function normalizePrinterKey(name) {
+  return String(name || "")
+    .toLowerCase()
+    .replace(/[\[\]()]/g, " ")
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function printerNamesLooselyMatch(a, b) {
+  const ka = normalizePrinterKey(a);
+  const kb = normalizePrinterKey(b);
+  if (!ka || !kb) return false;
+  if (ka === kb) return true;
+  if (ka.length >= 8 && kb.length >= 8) {
+    return ka.includes(kb) || kb.includes(ka);
+  }
+  return false;
+}
+
 function isVirtualPrinterName(name) {
   const n = String(name || "").toLowerCase();
   return /pdf|fax|xps|onenote|send to|microsoft print to|save as pdf|adobe/i.test(n);
@@ -38,6 +57,8 @@ function pickBestPrinter(printers, preferredName) {
 }
 
 module.exports = {
+  normalizePrinterKey,
+  printerNamesLooselyMatch,
   isVirtualPrinterName,
   isLikelyReceiptPrinterName,
   pickBestPrinter,

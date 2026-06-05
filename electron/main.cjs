@@ -24,7 +24,11 @@ const { printReceiptElectron } = require("./print-electron-receipt.cjs");
 const { withTimeout } = require("./print-timeout.cjs");
 const { inlineReceiptHtmlImages, srcToDataUrl } = require("./receipt-image-inline.cjs");
 const { buildEscPosReceiptWithLogo } = require("./escpos-raster-logo.cjs");
-const { pickBestPrinter, isVirtualPrinterName } = require("./printer-resolve.cjs");
+const {
+  pickBestPrinter,
+  isVirtualPrinterName,
+  printerNamesLooselyMatch,
+} = require("./printer-resolve.cjs");
 const path = require("path");
 const os = require("os");
 const fs = require("fs");
@@ -926,16 +930,36 @@ function clearPrinterVerified(db) {
 async function isPrinterOnlineOnOs(printerName) {
   const name = String(printerName || "").trim();
   if (!name) return { online: false, detail: "No printer selected" };
+  const printers = await getPrintersFromAnyWindow();
+  const hit = (printers || []).find(
+    (p) => p.name === name || printerNamesLooselyMatch(p.name, name),
+  );
   if (process.platform === "win32") {
     const r = await checkWindowsPrinterOnline(name);
-    return { online: r.online, detail: r.detail || "", name: r.name || name };
+    if (r.online) {
+      return { online: true, detail: r.detail || "", name: r.name || name };
+    }
+    if (hit) {
+      const reasons = hit.options && hit.options["printer-state-reasons"];
+      if (typeof reasons === "string" && /offline/i.test(reasons)) {
+        return { online: false, detail: "Printer reports offline" };
+      }
+      return { online: true, detail: r.detail || "" };
+    }
+    return { online: false, detail: r.detail || "", name: r.name || name };
   }
   if (process.platform === "darwin") {
     const cups = await checkMacPrinterOnline(name);
-    if (!cups.online) return cups;
+    if (cups.online) return cups;
+    if (hit) {
+      const reasons = hit.options && hit.options["printer-state-reasons"];
+      if (typeof reasons === "string" && /offline/i.test(reasons)) {
+        return { online: false, detail: "Printer reports offline" };
+      }
+      return { online: true, detail: cups.detail || "" };
+    }
+    return cups;
   }
-  const printers = await getPrintersFromAnyWindow();
-  const hit = (printers || []).find((p) => p.name === name);
   if (!hit) return { online: false, detail: "Printer not found" };
   const reasons = hit.options && hit.options["printer-state-reasons"];
   if (typeof reasons === "string" && /offline/i.test(reasons)) {
@@ -1060,8 +1084,14 @@ async function resolveActivePrinterName() {
   if (candidate) {
     if (process.platform === "win32") {
       const resolved = await resolveWindowsPrinterName(candidate);
-      candidate = resolved.ok ? resolved.name : "";
-    } else if (!list.some((p) => p.name === candidate)) {
+      if (resolved.ok) {
+        candidate = resolved.name;
+      } else if (
+        !list.some((p) => p.name === candidate || printerNamesLooselyMatch(p.name, candidate))
+      ) {
+        candidate = "";
+      }
+    } else if (!list.some((p) => p.name === candidate || printerNamesLooselyMatch(p.name, candidate))) {
       candidate = "";
     }
     if (candidate && (await checkOnline(candidate))) {
@@ -1093,8 +1123,7 @@ async function resolveActivePrinterName() {
       let n = p.name;
       if (process.platform === "win32") {
         const r = await resolveWindowsPrinterName(n);
-        if (!r.ok) continue;
-        n = r.name;
+        if (r.ok) n = r.name;
       }
       if (await checkOnline(n)) {
         if (!saved || n !== saved) writeSilentPrinterNameToDb(db, n);
@@ -1133,7 +1162,12 @@ async function getPrinterConnectionStatus() {
   const list = Array.isArray(printers) ? printers : [];
   const active = await resolveActivePrinterName();
   const deviceName = active.deviceName || active.name || "";
-  const inList = Boolean(deviceName && list.some((p) => p.name === deviceName));
+  const inList = Boolean(
+    deviceName &&
+      list.some(
+        (p) => p.name === deviceName || printerNamesLooselyMatch(p.name, deviceName),
+      ),
+  );
   const online = active.online;
   const saved = savedInDb || active.autoSelected;
 

@@ -99,7 +99,7 @@ async function checkWindowsPrinterOnline(printerName) {
     "$port = [string]$p.PortName",
     "if ($port -match 'PORTPROMPT|PDF|OneNote|Fax|XPS|File:') { Write-Output 'virtual'; exit 5 }",
     "$st = [string]$p.PrinterStatus",
-    "if ($st -match 'Offline|Error|NotAvailable|Stopped|Unknown') { Write-Output $st; exit 4 }",
+    "if ($st -eq 'Offline' -or $st -eq 'Error' -or $st -eq 'NotAvailable') { Write-Output $st; exit 4 }",
     "Write-Output 'ok'",
     "exit 0",
   ].join("\n");

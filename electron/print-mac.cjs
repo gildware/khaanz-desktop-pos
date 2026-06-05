@@ -6,7 +6,11 @@ const { buildEscPosBuffer, buildPlainTextBuffer } = require("./escpos-buffer.cjs
 const { appendPrintLog } = require("./print-log.cjs");
 const { printReceiptElectron } = require("./print-electron-receipt.cjs");
 const { reorderAttempts } = require("./print-strategy-windows.cjs");
-const { isLikelyReceiptPrinterName } = require("./printer-resolve.cjs");
+const {
+  isLikelyReceiptPrinterName,
+  normalizePrinterKey,
+  printerNamesLooselyMatch,
+} = require("./printer-resolve.cjs");
 
 const LPR = "/usr/bin/lpr";
 const LPSTAT = "/usr/bin/lpstat";
@@ -97,7 +101,15 @@ async function resolveCupsQueueName(requested) {
   const partial = queues.find(
     (q) => q.toLowerCase().includes(lower) || lower.includes(q.toLowerCase()),
   );
-  return partial || name;
+  if (partial) return partial;
+  const key = normalizePrinterKey(name);
+  if (key) {
+    const byKey = queues.find((q) => normalizePrinterKey(q) === key);
+    if (byKey) return byKey;
+    const fuzzy = queues.find((q) => printerNamesLooselyMatch(q, name));
+    if (fuzzy) return fuzzy;
+  }
+  return name;
 }
 
 async function resolveCupsQueueNameCached(requested) {
@@ -119,15 +131,22 @@ async function checkMacPrinterOnline(printerName) {
   const name = String(printerName || "").trim();
   if (!name) return { online: false, detail: "No printer selected" };
 
-  const cupsName = await resolveCupsQueueName(name);
   const queues = await listCupsQueues();
+  const cupsName = await resolveCupsQueueName(name);
   if (queues.length && !queues.includes(cupsName)) {
-    return { online: false, detail: "Printer queue not found in CUPS." };
+    const fuzzy = queues.find((q) => printerNamesLooselyMatch(q, name));
+    if (!fuzzy) {
+      return { online: false, detail: "Printer queue not found in CUPS." };
+    }
   }
+  const lpstatQueue =
+    queues.length && queues.includes(cupsName)
+      ? cupsName
+      : queues.find((q) => printerNamesLooselyMatch(q, name)) || cupsName;
 
   try {
     const out = await new Promise((resolve, reject) => {
-      const proc = spawn(LPSTAT, ["-p", cupsName], { stdio: ["ignore", "pipe", "pipe"] });
+      const proc = spawn(LPSTAT, ["-p", lpstatQueue], { stdio: ["ignore", "pipe", "pipe"] });
       let stdout = "";
       let stderr = "";
       proc.stdout.on("data", (d) => {
@@ -142,10 +161,14 @@ async function checkMacPrinterOnline(printerName) {
         else reject(new Error(stderr || stdout || `lpstat failed (${code})`));
       });
     });
-    if (/disabled|offline|paused|not found|does not exist|unknown/i.test(out)) {
+    const head = (out.split("\n")[0] || "").trim();
+    if (/printer\s+.+\s+(disabled|offline|paused)\b/i.test(head)) {
       return { online: false, detail: "Printer is offline or disabled." };
     }
-    return { online: true, detail: "", cupsName };
+    if (/does not exist|unknown printer/i.test(out)) {
+      return { online: false, detail: "Printer queue not found." };
+    }
+    return { online: true, detail: "", cupsName: lpstatQueue };
   } catch (e) {
     const msg = String(e && e.message ? e.message : e);
     if (/not found|unknown|does not exist/i.test(msg)) {
