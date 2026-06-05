@@ -22,6 +22,8 @@ const {
 const { checkMacPrinterOnline, printPlainTextMac } = require("./print-mac.cjs");
 const { printReceiptElectron } = require("./print-electron-receipt.cjs");
 const { withTimeout } = require("./print-timeout.cjs");
+const { inlineReceiptHtmlImages, srcToDataUrl } = require("./receipt-image-inline.cjs");
+const { buildEscPosReceiptWithLogo } = require("./escpos-raster-logo.cjs");
 const { pickBestPrinter, isVirtualPrinterName } = require("./printer-resolve.cjs");
 const path = require("path");
 const os = require("os");
@@ -943,30 +945,53 @@ async function isPrinterOnlineOnOs(printerName) {
 }
 
 async function waitForPrintDocumentReady(webContents) {
-  await webContents.executeJavaScript(`
-    new Promise((resolve) => {
-      const finish = () => requestAnimationFrame(() => requestAnimationFrame(resolve));
-      const imgs = Array.from(document.images || []);
-      let pending = imgs.filter((img) => !img.complete);
-      const onImgDone = () => {
-        pending = pending.filter((img) => !img.complete);
-        if (pending.length === 0) finish();
-      };
-      for (const img of imgs) {
-        img.addEventListener("load", onImgDone);
-        img.addEventListener("error", onImgDone);
-      }
-      const afterFonts = () => {
-        if (pending.length === 0) finish();
-        else setTimeout(finish, 3000);
-      };
-      if (document.fonts && document.fonts.ready) {
-        document.fonts.ready.then(afterFonts).catch(afterFonts);
-      } else {
-        afterFonts();
-      }
-    })
-  `);
+  await withTimeout(
+    webContents.executeJavaScript(`
+      new Promise((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          requestAnimationFrame(() => requestAnimationFrame(resolve));
+        };
+        const hardCapMs = 800;
+        const hardCap = setTimeout(finish, hardCapMs);
+        const imgs = Array.from(document.images || []);
+        let pending = imgs.filter((img) => !img.complete);
+        const onImgDone = () => {
+          pending = pending.filter((img) => !img.complete);
+          if (pending.length === 0) {
+            clearTimeout(hardCap);
+            finish();
+          }
+        };
+        for (const img of imgs) {
+          img.addEventListener("load", onImgDone);
+          img.addEventListener("error", onImgDone);
+        }
+        const afterFonts = () => {
+          if (pending.length === 0) {
+            clearTimeout(hardCap);
+            finish();
+          } else {
+            setTimeout(() => {
+              clearTimeout(hardCap);
+              finish();
+            }, 250);
+          }
+        };
+        if (document.fonts && document.fonts.ready) {
+          document.fonts.ready.then(afterFonts).catch(afterFonts);
+        } else {
+          afterFonts();
+        }
+      })
+    `),
+    1200,
+    "Print document ready",
+  ).catch(() => {
+    /* proceed — never block printing on asset wait */
+  });
   await new Promise((r) => setTimeout(r, 80));
 }
 
@@ -1227,8 +1252,9 @@ async function printReceiptWindows(printerName, body, safeTitle, receiptOpts = {
       preferredMethod: preferred,
       fastPath,
       gdiReceipt: readWindowsGdiReceiptFromDb(db),
+      escPosBytes: receiptOpts.escPosBytes,
     }),
-    90_000,
+    receiptOpts.escPosBytes ? 15_000 : 90_000,
     "Windows print",
   );
   if (r.ok) {
@@ -1250,10 +1276,10 @@ async function printReceiptWindows(printerName, body, safeTitle, receiptOpts = {
 }
 
 /** macOS receipt print — uses cached CUPS/Electron method after first successful job. */
-async function printReceiptDarwin(printerName, body, safeTitle) {
+async function printReceiptDarwin(printerName, body, safeTitle, receiptOpts = {}) {
   const preferredMac = readPreferredPrintMethodMacFromDb(db);
 
-  if (preferredMac === "electron") {
+  if (!receiptOpts.escPosBytes && preferredMac === "electron") {
     const electronFirst = await printReceiptElectron(printerName, body, safeTitle);
     if (electronFirst.ok) {
       writeSilentPrinterNameToDb(db, printerName);
@@ -1265,6 +1291,7 @@ async function printReceiptDarwin(printerName, body, safeTitle) {
 
   const r = await printPlainTextMac(printerName, body, safeTitle, {
     preferredMethod: preferredMac === "electron" ? "" : preferredMac,
+    escPosBytes: receiptOpts.escPosBytes,
   });
   if (r.ok) {
     writeSilentPrinterNameToDb(db, r.deviceName || printerName);
@@ -1327,8 +1354,26 @@ async function resolvePrinterForReceipt(deviceOverride) {
   return { ok: true, name: active.name };
 }
 
+async function buildEscPosBytesForReceipt(body, logoOpts = {}) {
+  const logoSrc = String(logoOpts.logoDataUrl || "").trim();
+  if (!logoSrc) return null;
+  const dataUrl = logoSrc.startsWith("data:") ? logoSrc : await srcToDataUrl(logoSrc);
+  if (!dataUrl) return null;
+  return buildEscPosReceiptWithLogo(body, dataUrl, {
+    logoMaxWidthMm: logoOpts.logoMaxWidthMm,
+    logoMaxHeightMm: logoOpts.logoMaxHeightMm,
+  });
+}
+
 /** Direct receipt print — Windows uses driver chain; macOS uses ESC/POS + Electron. */
-async function printReceiptText({ text, title, deviceName: deviceOverride }) {
+async function printReceiptText({
+  text,
+  title,
+  deviceName: deviceOverride,
+  logoDataUrl,
+  logoMaxWidthMm,
+  logoMaxHeightMm,
+}) {
   const body = String(text || "").trim();
   if (!body) {
     return { ok: false, error: "Nothing to print." };
@@ -1337,6 +1382,20 @@ async function printReceiptText({ text, title, deviceName: deviceOverride }) {
   const resolved = await resolvePrinterForReceipt(deviceOverride);
   if (!resolved.ok) return { ok: false, error: resolved.error };
   const printerName = resolved.name;
+
+  let escPosBytes = null;
+  if (logoDataUrl) {
+    try {
+      escPosBytes = await buildEscPosBytesForReceipt(body, {
+        logoDataUrl,
+        logoMaxWidthMm,
+        logoMaxHeightMm,
+      });
+    } catch {
+      escPosBytes = null;
+    }
+  }
+  const receiptOpts = { ...resolved, escPosBytes };
 
   if (isDevMockPrintEnabled()) {
     return {
@@ -1348,11 +1407,11 @@ async function printReceiptText({ text, title, deviceName: deviceOverride }) {
   }
 
   if (process.platform === "win32") {
-    return printReceiptWindows(printerName, body, title || "Receipt", resolved);
+    return printReceiptWindows(printerName, body, title || "Receipt", receiptOpts);
   }
 
   if (process.platform === "darwin") {
-    return printReceiptDarwin(printerName, body, title || "Receipt");
+    return printReceiptDarwin(printerName, body, title || "Receipt", receiptOpts);
   }
 
   const electron = await printReceiptElectron(printerName, body, title || "Receipt");
@@ -1364,15 +1423,56 @@ async function printReceiptText({ text, title, deviceName: deviceOverride }) {
   return withTimeout(printPlainTextViaHtmlWindow(body, title || "Receipt"), 45_000, "Print");
 }
 
+async function printLoadedReceiptPlainText(webContents, chosen, safeTitle) {
+  const plainText = await webContents.executeJavaScript(
+    `(document.body && document.body.innerText) ? document.body.innerText : ""`,
+  );
+  if (!String(plainText || "").trim()) {
+    return { ok: false, error: "Receipt is empty — nothing to print." };
+  }
+
+  if (process.platform === "win32") {
+    const verified = readPrinterVerifiedName(db);
+    return printReceiptWindows(chosen, plainText, safeTitle, {
+      verifiedFastPath: Boolean(verified && verified === chosen),
+    });
+  }
+
+  if (process.platform === "darwin") {
+    return printReceiptDarwin(chosen, plainText, safeTitle);
+  }
+
+  const electron = await printReceiptElectron(chosen, plainText, safeTitle);
+  if (electron.ok) return electron;
+
+  return printWebContentsAsync(
+    webContents,
+    getThermalPrintOptions(chosen),
+    30_000,
+  );
+}
+
 async function printSilentHtml({ html, title }) {
-  const max = 600_000;
-  if (!html || typeof html !== "string" || html.length > max) {
+  const max = 8_000_000;
+  if (!html || typeof html !== "string") {
     return { ok: false, error: "Invalid print payload." };
   }
   const safeTitle = typeof title === "string" && title.length < 200 ? title : "Receipt";
-  const doc = /^\s*<!DOCTYPE/i.test(html)
+  let doc = /^\s*<!DOCTYPE/i.test(html)
     ? html
     : wrapThermalPrintDocument(html, safeTitle);
+
+  try {
+    doc = await inlineReceiptHtmlImages(doc);
+  } catch {
+    /* keep original doc */
+  }
+  if (doc.length > max) {
+    return {
+      ok: false,
+      error: "Receipt is too large to print. Try a smaller logo image.",
+    };
+  }
 
   const printDir = path.join(app.getPath("temp"), "khaanz-print");
   fs.mkdirSync(printDir, { recursive: true });
@@ -1444,52 +1544,25 @@ async function printSilentHtml({ html, title }) {
 
         const needsVisualPrint = await receiptDocumentNeedsVisualPrint(win.webContents);
         if (needsVisualPrint) {
-          const r = await printWebContentsAsync(
+          const visual = await printWebContentsAsync(
             win.webContents,
             getThermalPrintOptions(chosen, { withImages: true }),
             30_000,
           );
-          if (r.ok) {
+          if (visual.ok) {
             writeSilentPrinterNameToDb(db, chosen);
             setPrinterVerified(db, chosen);
+            settle(visual);
+            return;
           }
-          settle(r);
-          return;
+          /* Image print failed — fall back to plain text so the bill still prints. */
         }
 
-        const plainText = await win.webContents.executeJavaScript(
-          `(document.body && document.body.innerText) ? document.body.innerText : ""`,
-        );
-        if (!String(plainText || "").trim()) {
-          settle({ ok: false, error: "Receipt is empty — nothing to print." });
-          return;
+        const r = await printLoadedReceiptPlainText(win.webContents, chosen, safeTitle);
+        if (r.ok) {
+          writeSilentPrinterNameToDb(db, chosen);
+          setPrinterVerified(db, chosen);
         }
-
-        if (process.platform === "win32") {
-          const verified = readPrinterVerifiedName(db);
-          const r = await printReceiptWindows(chosen, plainText, safeTitle, {
-            verifiedFastPath: Boolean(verified && verified === chosen),
-          });
-          settle(r);
-          return;
-        }
-
-        if (process.platform === "darwin") {
-          settle(await printReceiptDarwin(chosen, plainText, safeTitle));
-          return;
-        }
-
-        const electron = await printReceiptElectron(chosen, plainText, safeTitle);
-        if (electron.ok) {
-          settle(electron);
-          return;
-        }
-
-        const r = await printWebContentsAsync(
-          win.webContents,
-          getThermalPrintOptions(chosen),
-          30_000,
-        );
         settle(r);
       } catch (e) {
         settle({ ok: false, error: String(e && e.message ? e.message : e) });
@@ -2185,9 +2258,22 @@ function registerIpc() {
     const title = payload && typeof payload.title === "string" ? payload.title : "Receipt";
     const deviceName =
       payload && typeof payload.deviceName === "string" ? payload.deviceName : "";
+    const logoDataUrl =
+      payload && typeof payload.logoDataUrl === "string" ? payload.logoDataUrl : "";
+    const logoMaxWidthMm =
+      payload && typeof payload.logoMaxWidthMm === "number" ? payload.logoMaxWidthMm : undefined;
+    const logoMaxHeightMm =
+      payload && typeof payload.logoMaxHeightMm === "number" ? payload.logoMaxHeightMm : undefined;
     return withTimeout(
-      printReceiptText({ text, title, deviceName: deviceName || undefined }),
-      95_000,
+      printReceiptText({
+        text,
+        title,
+        deviceName: deviceName || undefined,
+        logoDataUrl: logoDataUrl || undefined,
+        logoMaxWidthMm,
+        logoMaxHeightMm,
+      }),
+      logoDataUrl ? 12_000 : 95_000,
       "Print",
     );
   });

@@ -1,4 +1,5 @@
 import type { BillPrintLayout } from "./bill-preview-settings";
+import { withIpcTimeout } from "./ipc-timeout";
 import type { CartComboLine, CartItemLine, CartLine } from "../types";
 
 export type PosReceiptAddonRow = {
@@ -685,28 +686,59 @@ ${o.notes.trim() ? `<div class="muted">Note: ${escapeHtml(o.notes.trim())}</div>
 `;
 }
 
+export type ReceiptPrintOptions = {
+  logoDataUrl?: string;
+  logoMaxWidthMm?: number;
+  logoMaxHeightMm?: number;
+};
+
 type DesktopPrintBridge = {
-  printSilentHtml: (html: string, title?: string) => Promise<{ ok: boolean; error?: string }>;
-  printReceiptText?: (text: string, title?: string) => Promise<{ ok: boolean; error?: string }>;
+  printSilentHtml?: (html: string, title?: string) => Promise<{ ok: boolean; error?: string }>;
+  printReceiptText?: (
+    text: string,
+    title?: string,
+    options?: ReceiptPrintOptions,
+  ) => Promise<{ ok: boolean; error?: string }>;
   getPlatform?: () => Promise<string>;
 };
 
+/** Fast path — raw ESC/POS; logo bills target ~1–2s after printer is verified. */
+const PRINT_IPC_TIMEOUT_MS = 12_000;
+
+function receiptPrintOptionsFromLayout(layout?: BillPrintLayout): ReceiptPrintOptions | undefined {
+  if (!layout || layout.showLogo === false) return undefined;
+  const logoDataUrl = layout.logoSrc?.trim();
+  if (!logoDataUrl) return undefined;
+  return {
+    logoDataUrl,
+    logoMaxWidthMm: layout.logoMaxWidthMm,
+    logoMaxHeightMm: layout.logoMaxHeightMm,
+  };
+}
+
 async function sendReceiptToDesktop(
   desktop: DesktopPrintBridge,
-  preferPlainText: boolean,
   plainText: string,
-  htmlDoc: string,
   title: string,
+  printOptions?: ReceiptPrintOptions,
 ): Promise<void> {
-  if (preferPlainText && desktop.printReceiptText) {
-    const r = await desktop.printReceiptText(plainText, title);
+  if (desktop.printReceiptText) {
+    const r = await withIpcTimeout(
+      desktop.printReceiptText(plainText, title, printOptions),
+      PRINT_IPC_TIMEOUT_MS,
+      "Print",
+    );
     if (r.ok) return;
     throw new Error(r.error || "Print failed");
   }
   if (!desktop.printSilentHtml) {
     throw new Error("Print failed");
   }
-  const r = await desktop.printSilentHtml(htmlDoc, title);
+  const r = await withIpcTimeout(
+    desktop.printSilentHtml(plainText, title),
+    PRINT_IPC_TIMEOUT_MS,
+    "Print",
+  );
   if (r.ok) return;
   throw new Error(r.error || "Print failed");
 }
@@ -819,17 +851,12 @@ export async function printPosBillThermal(
   }
   if (!desktop?.printSilentHtml && !desktop?.printReceiptText) return;
 
-  const platform = desktop.getPlatform ? await desktop.getPlatform() : "";
   const plainText = buildBillPlainText(options);
-  const htmlDoc = wrapThermalPrintDocument(buildBillHtmlBody(options), "Bill", options.layout);
-  const preferPlainText =
-    usePlainTextReceipt(platform) && !billReceiptNeedsHtmlPrint(options.layout);
   await sendReceiptToDesktop(
     desktop,
-    preferPlainText,
     plainText,
-    htmlDoc,
     "Bill",
+    receiptPrintOptionsFromLayout(options.layout),
   );
 }
 
@@ -842,9 +869,6 @@ export async function printPosKotThermal(
   }
   if (!desktop?.printSilentHtml && !desktop?.printReceiptText) return;
 
-  const platform = desktop.getPlatform ? await desktop.getPlatform() : "";
   const plainText = buildKotPlainText(options);
-  const htmlDoc = wrapThermalPrintDocument(buildKotHtmlBody(options), "KOT", options.layout);
-  const preferPlainText = usePlainTextReceipt(platform);
-  await sendReceiptToDesktop(desktop, preferPlainText, plainText, htmlDoc, "KOT");
+  await sendReceiptToDesktop(desktop, plainText, "KOT");
 }

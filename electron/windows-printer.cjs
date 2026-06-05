@@ -193,11 +193,10 @@ async function printTextRawWindows(resolvedName, text) {
 }
 
 /** ESC/POS RAW bytes via WinSpool (Generic/Text Only queues). */
-async function printEscPosRawWindows(resolvedName, text) {
+async function printEscPosRawBytesWindows(resolvedName, bytes) {
   const dir = getPrintTempDir();
   fs.mkdirSync(dir, { recursive: true });
   const binPath = path.join(dir, `receipt-${Date.now()}.bin`);
-  const bytes = buildEscPosBuffer(text);
   fs.writeFileSync(binPath, bytes);
 
   const script = [
@@ -231,6 +230,10 @@ async function printEscPosRawWindows(resolvedName, text) {
     ok: false,
     error: friendlyWindowsPrintError(r.stderr || r.stdout || (r.err && r.err.message)),
   };
+}
+
+async function printEscPosRawWindows(resolvedName, text) {
+  return printEscPosRawBytesWindows(resolvedName, buildEscPosBuffer(text));
 }
 
 /** Fallback: plain text via Out-Printer. */
@@ -426,6 +429,25 @@ async function printPlainTextWindows(deviceName, text, title, options = {}) {
 
   const preferred = String(options.preferredMethod || "").trim();
   const fastPath = Boolean(options.fastPath && preferred);
+
+  if (options.escPosBytes && Buffer.isBuffer(options.escPosBytes)) {
+    let name = wanted;
+    if (!fastPath) {
+      const ctx = await getWindowsPrinterContext(wanted);
+      if (!ctx.ok) {
+        return { ok: false, error: ctx.detail || ctx.error || friendlyWindowsPrintError("") };
+      }
+      name = ctx.resolvedName || ctx.name;
+    }
+    try {
+      const raw = await printEscPosRawBytesWindows(name, options.escPosBytes);
+      if (raw.ok) {
+        return { ok: true, method: "escpos-raw-logo", deviceName: name };
+      }
+    } catch {
+      /* fall through to plain text without logo */
+    }
+  }
 
   let name = wanted;
   let gdiReceipt = options.gdiReceipt !== false;

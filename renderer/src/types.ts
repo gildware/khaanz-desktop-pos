@@ -293,7 +293,15 @@ export type KhaanzDesktopApi = {
     | { ok: false; error: string }
   >;
   printSilentHtml: (html: string, title?: string) => Promise<{ ok: true } | { ok: false; error: string }>;
-  printReceiptText: (text: string, title?: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+  printReceiptText: (
+    text: string,
+    title?: string,
+    options?: {
+      logoDataUrl?: string;
+      logoMaxWidthMm?: number;
+      logoMaxHeightMm?: number;
+    },
+  ) => Promise<{ ok: true } | { ok: false; error: string }>;
   getPrinterStatus: () => Promise<{
     ok: true;
     saved: boolean;

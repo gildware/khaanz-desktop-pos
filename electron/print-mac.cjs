@@ -251,6 +251,7 @@ function lprTimeoutForAttempt(methodId, hasPreferred) {
 
 /**
  * Print receipt on macOS — CUPS (cached preferred method first), then Electron GDI.
+ * When options.escPosBytes is set, sends one raw ESC/POS job (logo + text) immediately.
  */
 async function printPlainTextMac(printerName, text, title, options = {}) {
   const name = String(printerName || "").trim();
@@ -260,6 +261,29 @@ async function printPlainTextMac(printerName, text, title, options = {}) {
 
   const cupsName = await resolveCupsQueueNameCached(name);
   const safeTitle = title || "Receipt";
+
+  if (options.escPosBytes && Buffer.isBuffer(options.escPosBytes)) {
+    try {
+      await lprBuffer(cupsName, options.escPosBytes, safeTitle, true, "escpos-raw", LPR_TIMEOUT_MS);
+      appendPrintLog({
+        event: "print-ok",
+        platform: "darwin",
+        method: "escpos-raw-logo",
+        printer: cupsName,
+        title: safeTitle,
+      });
+      return { ok: true, method: "escpos-raw-logo", deviceName: cupsName };
+    } catch (e) {
+      appendPrintLog({
+        event: "print-fallback",
+        platform: "darwin",
+        method: "escpos-raw-logo",
+        printer: cupsName,
+        error: String(e && e.message ? e.message : e),
+      });
+      /* fall through to plain text without logo */
+    }
+  }
   const errors = [];
   const preferred = String(options.preferredMethod || "").trim();
   const cupsAttempts = buildMacCupsAttempts(cupsName, body, safeTitle, options);
