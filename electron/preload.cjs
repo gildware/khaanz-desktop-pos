@@ -47,7 +47,7 @@ contextBridge.exposeInMainWorld("khaanzDesktop", {
       title,
       ...(options && typeof options === "object" ? options : {}),
     }),
-  getPrinterStatus: () => invoke("khaanz:get-printer-status"),
+  getPrinterStatus: (opts) => invoke("khaanz:get-printer-status", opts || {}),
   testPrint: (deviceName) => invoke("khaanz:test-print", deviceName || ""),
   listPrinters: () => invoke("khaanz:list-printers"),
   getSilentPrinter: () => invoke("khaanz:get-silent-printer"),
@@ -71,5 +71,8 @@ contextBridge.exposeInMainWorld("khaanzDesktop", {
   setBillPreviewSettings: (settings) =>
     invoke("khaanz:set-bill-preview-settings", { settings }),
   pickBillLogo: () => invoke("khaanz:pick-bill-logo"),
+  openExternalUrl: (url) => invoke("khaanz:open-external-url", { url }),
+  hydrateOrderDistances: (orders) =>
+    invoke("khaanz:hydrate-order-distances", { orders }),
 });
 

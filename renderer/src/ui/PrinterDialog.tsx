@@ -77,7 +77,11 @@ export function PrinterDialog({ open, onClose, onSaved }: Props) {
   const refresh = useCallback(async () => {
     if (!desktop?.getPrinterStatus) return;
     try {
-      const r = await withIpcTimeout(desktop.getPrinterStatus(), 8000, "Printer status");
+      const r = await withIpcTimeout(
+        desktop.getPrinterStatus({ includeDiagnostics: true }),
+        25_000,
+        "Printer status",
+      );
       if (!r.ok) return;
       setStatus(r);
       const list = r.printers ?? [];

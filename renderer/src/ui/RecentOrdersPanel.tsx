@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Loader2Icon } from "lucide-react";
+import { Loader2Icon, MapPinIcon, MessageCircleIcon, NavigationIcon } from "lucide-react";
 import {
   fulfillmentLabelFromKey,
   orderLinePayloadsToReceiptLines,
@@ -20,6 +20,14 @@ import {
   statusLabelFor,
 } from "../lib/order-status";
 import type { BillPrintLayout } from "../lib/bill-preview-settings";
+import {
+  enrichOrderLocation,
+  formatTravelDistanceLabel,
+  hydrateOrdersWithDistance,
+  parseOrderCoords,
+  resolveCustomerMapUrl,
+} from "../lib/order-location";
+import { openWhatsAppOrder } from "../lib/whatsapp";
 import type { PosSettings, RecentOrderRow } from "../types";
 import { OrderLineView } from "./OrderLineView";
 import {
@@ -55,10 +63,12 @@ const ONLINE_STATUS_TABS: { id: StatusFilter; label: string }[] = [
 ];
 
 function normalizeOrderRows(rows: RecentOrderRow[]): RecentOrderRow[] {
-  return rows.map((o) => ({
-    ...o,
-    status: normalizeOrderStatus(o.status),
-  }));
+  return rows.map((o) =>
+    enrichOrderLocation({
+      ...o,
+      status: normalizeOrderStatus(o.status),
+    }),
+  );
 }
 
 function defaultStatusFilter(_view: OrderView): StatusFilter {
@@ -83,6 +93,7 @@ type Props = {
   posSettings: PosSettings | null;
   billPrintLayout?: BillPrintLayout;
   printerConnected?: boolean;
+  apiOrigin?: string | null;
 };
 
 export function RecentOrdersPanel({
@@ -92,6 +103,7 @@ export function RecentOrdersPanel({
   posSettings,
   billPrintLayout,
   printerConnected = false,
+  apiOrigin = null,
 }: Props) {
   const api = window.posDesktop;
   const desktop = window.khaanzDesktop;
@@ -113,6 +125,7 @@ export function RecentOrdersPanel({
     null,
   );
   const [printCooldownUntil, setPrintCooldownUntil] = useState<Record<string, number>>({});
+  const [travelConfigured, setTravelConfigured] = useState(true);
 
   const statusTabs = orderView === "online" ? ONLINE_STATUS_TABS : RECENT_STATUS_TABS;
 
@@ -146,8 +159,19 @@ export function RecentOrdersPanel({
           setError(out.error);
           return;
         }
-        const rows = normalizeOrderRows(Array.isArray(out.orders) ? out.orders : []);
+        let rows = normalizeOrderRows(Array.isArray(out.orders) ? out.orders : []);
+        let travelReady = out.travelDistanceConfigured !== false;
+        if (orderView === "online") {
+          const hydrated = await hydrateOrdersWithDistance(rows, apiOrigin, desktop);
+          rows = hydrated.rows;
+          if (hydrated.travelDistanceConfigured !== undefined) {
+            travelReady = hydrated.travelDistanceConfigured;
+          }
+        }
         setOrders(rows);
+        if (orderView === "online") {
+          setTravelConfigured(travelReady);
+        }
         if (orderView === "online" && out.stale && rows.length === 0) {
           setError(
             "No online orders loaded. Tap Sync data, or update the server app if this persists.",
@@ -169,6 +193,13 @@ export function RecentOrdersPanel({
         }
         if (dayStart) {
           rows = rows.filter((o) => isOrderOnIstDate(o.createdAt, dayStart));
+        }
+        if (orderView === "online") {
+          const hydrated = await hydrateOrdersWithDistance(rows, apiOrigin, desktop);
+          rows = hydrated.rows;
+          if (hydrated.travelDistanceConfigured !== undefined) {
+            setTravelConfigured(hydrated.travelDistanceConfigured);
+          }
         }
         setOrders(rows);
         return;
@@ -203,7 +234,7 @@ export function RecentOrdersPanel({
       setInitialLoad(false);
       setRefreshing(false);
     }
-  }, [api, desktop, orderDate, orderView, sessionId]);
+  }, [api, apiOrigin, desktop, orderDate, orderView, sessionId]);
 
   useEffect(() => {
     setStatusFilter(defaultStatusFilter(orderView));
@@ -302,6 +333,13 @@ export function RecentOrdersPanel({
           );
         }
         if (mode === "bill" || mode === "both") {
+          const deliveryCharge =
+            o.deliveryChargeMinor && o.deliveryChargeMinor > 0
+              ? o.deliveryChargeMinor / 100
+              : undefined;
+          const discount =
+            o.discountMinor && o.discountMinor > 0 ? o.discountMinor / 100 : undefined;
+          const itemsSubtotal = receiptLines.reduce((sum, line) => sum + line.subtotal, 0);
           await printPosBillThermal(
             {
               restaurantName: posSettings?.displayName || "Khaanz",
@@ -313,10 +351,15 @@ export function RecentOrdersPanel({
               dineInTable: o.dineInTable?.trim() || undefined,
               customerName: o.customerName?.trim() || "Guest",
               phoneDigits: o.customerPhone?.trim() || "0000000000",
-              notes: "",
+              customerAddress: o.address?.trim() || undefined,
+              notes: o.notes?.trim() || "",
+              footerNote: footer || undefined,
               paymentLabel: "",
               lines: receiptLines,
               total: o.totalMinor / 100,
+              itemsSubtotal,
+              deliveryCharge,
+              discount,
               layout: billPrintLayout,
             },
             desktop,
@@ -327,6 +370,55 @@ export function RecentOrdersPanel({
       }
     },
     [desktop, posSettings, billPrintLayout, isOrderPrintOnCooldown, startPrintCooldown],
+  );
+
+  const openExternalUrl = useCallback(
+    async (url: string) => {
+      if (!url.trim()) return;
+      if (desktop?.openExternalUrl) {
+        const out = await desktop.openExternalUrl(url);
+        if (!out.ok) {
+          setError(out.error || "Could not open link in browser.");
+        }
+        return;
+      }
+      window.open(url, "_blank", "noopener,noreferrer");
+    },
+    [desktop],
+  );
+
+  const sendOrderToRestaurantWhatsApp = useCallback(
+    (o: RecentOrderRow) => {
+      const phone = posSettings?.whatsappPhoneE164?.replace(/\D/g, "") ?? "";
+      if (!phone) {
+        setError("Restaurant WhatsApp number is not set. Add it under Settings.");
+        return;
+      }
+      if (orderLinePayloadsToReceiptLines(o.lines ?? []).length === 0) {
+        setError("No items on this order to send.");
+        return;
+      }
+      openWhatsAppOrder(
+        {
+          orderRef: o.orderRef,
+          customerName: o.customerName,
+          phone: o.customerPhone,
+          fulfillment: o.fulfillment,
+          scheduleMode: o.scheduleMode,
+          scheduledAt: o.scheduledAt ?? null,
+          address: o.address?.trim() ?? "",
+          landmark: o.landmark?.trim() ?? "",
+          notes: o.notes?.trim() ?? "",
+          latitude: o.latitude ?? null,
+          longitude: o.longitude ?? null,
+          deliveryChargeMinor: o.deliveryChargeMinor ?? 0,
+          lines: o.lines ?? [],
+        },
+        phone,
+        openExternalUrl,
+      );
+    },
+    [openExternalUrl, posSettings],
   );
 
   if (initialLoad) {
@@ -419,6 +511,12 @@ export function RecentOrdersPanel({
       </div>
 
       {error ? <p className="text-destructive text-sm">{error}</p> : null}
+      {orderView === "online" && !travelConfigured ? (
+        <p className="rounded-xl border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-amber-950 text-xs dark:text-amber-100">
+          Driving distance is off on the server. Set GOOGLE_MAPS_API_KEY and restaurant
+          coordinates in server settings.
+        </p>
+      ) : null}
       {!printerConnected ? (
         <p className="text-muted-foreground text-sm">Connect printer to enable printing.</p>
       ) : null}
@@ -451,11 +549,27 @@ export function RecentOrdersPanel({
               const printButtonsDisabled =
                 !canPrintWhole || !printerConnected || printOnCooldown;
               const badgeLabel = displayStatusLabel(o, orderView);
+              const canSendWhatsApp =
+                orderView === "online" &&
+                (o.status === "PENDING" ||
+                  o.status === "ACCEPTED" ||
+                  o.status === "OUT_FOR_DELIVERY");
+              const coords = parseOrderCoords(o);
+              const showLocation =
+                orderView === "online" && Boolean(o.address?.trim() || coords);
+              const showDistanceRow =
+                orderView === "online" &&
+                o.fulfillment === "delivery" &&
+                Boolean(coords || o.address?.trim());
 
               return (
                 <article
                   key={o.id}
-                  className={`flex h-[min(340px,42dvh)] min-h-[260px] flex-col overflow-hidden rounded-xl border bg-card p-3 shadow-sm ${
+                  className={`flex ${
+                    orderView === "online"
+                      ? "h-[min(480px,52dvh)] min-h-[360px]"
+                      : "h-[min(340px,42dvh)] min-h-[260px]"
+                  } flex-col overflow-hidden rounded-xl border bg-card p-3 shadow-sm ${
                     isPendingOnline ? "ring-1 ring-amber-500/30" : ""
                   }`}
                 >
@@ -485,8 +599,62 @@ export function RecentOrdersPanel({
                     </div>
                     <div className="shrink-0 text-right">
                       <p className="font-semibold text-sm tabular-nums">₹{rupee}</p>
+                      {orderView === "online" && (o.deliveryChargeMinor ?? 0) > 0 ? (
+                        <p className="text-muted-foreground text-[10px] tabular-nums">
+                          incl. ₹{((o.deliveryChargeMinor ?? 0) / 100).toFixed(0)} delivery
+                        </p>
+                      ) : null}
                     </div>
                   </div>
+
+                  {showLocation ? (
+                    <div className="shrink-0 space-y-1.5 border-b border-border/70 py-2">
+                      <div className="flex items-start gap-1.5">
+                        <MapPinIcon className="mt-0.5 size-3.5 shrink-0 text-primary" />
+                        <div className="min-w-0 flex-1 text-[11px]">
+                          <p className="text-muted-foreground text-[10px] font-medium uppercase tracking-wide">
+                            Customer location
+                          </p>
+                          {o.address?.trim() ? (
+                            <p className="mt-0.5 leading-snug">{o.address.trim()}</p>
+                          ) : coords ? (
+                            <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                              {coords.lat.toFixed(5)}, {coords.lng.toFixed(5)}
+                            </p>
+                          ) : null}
+                          {o.landmark?.trim() ? (
+                            <p className="text-muted-foreground text-[10px]">
+                              Landmark: {o.landmark.trim()}
+                            </p>
+                          ) : null}
+                        </div>
+                      </div>
+                      {showDistanceRow ? (
+                        <div className="flex flex-wrap items-center gap-1.5 pl-5">
+                          {o.distance ? (
+                            <span className="inline-flex items-center gap-1 rounded border border-sky-600/40 bg-sky-500/12 px-1.5 py-0.5 text-[10px] font-medium text-sky-950 dark:border-sky-400/35 dark:bg-sky-400/12 dark:text-sky-50">
+                              <NavigationIcon className="size-2.5" />
+                              {formatTravelDistanceLabel(o.distance)}
+                            </span>
+                          ) : coords && travelConfigured ? (
+                            <span className="text-muted-foreground text-[10px]">
+                              Distance unavailable
+                            </span>
+                          ) : null}
+                          {resolveCustomerMapUrl(o) ? (
+                            <button
+                              type="button"
+                              onClick={() => void openExternalUrl(resolveCustomerMapUrl(o)!)}
+                              className="inline-flex items-center gap-1 text-[10px] font-medium text-primary underline-offset-2 hover:underline"
+                            >
+                              <NavigationIcon className="size-2.5" />
+                              Open in Google Maps
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
 
                   <div className="flex min-h-0 flex-1 flex-col overflow-hidden py-2">
                     <h3 className="shrink-0 text-muted-foreground text-[10px] font-semibold uppercase tracking-wide">
@@ -602,6 +770,19 @@ export function RecentOrdersPanel({
                           </button>
                         ) : null}
                       </div>
+                    ) : null}
+                    {canSendWhatsApp ? (
+                      <button
+                        type="button"
+                        disabled={
+                          !posSettings?.whatsappPhoneE164?.trim() || !canPrintWhole
+                        }
+                        onClick={() => sendOrderToRestaurantWhatsApp(o)}
+                        className="flex h-8 w-full items-center justify-center gap-1.5 rounded-md bg-[#25D366] text-[10px] text-white hover:bg-[#20bd5a] disabled:opacity-50"
+                      >
+                        <MessageCircleIcon className="size-3.5" />
+                        Send order to Restaurant WhatsApp
+                      </button>
                     ) : null}
                   </footer>
                 </article>

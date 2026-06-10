@@ -297,14 +297,18 @@ async function printPlainTextMac(printerName, text, title, options = {}) {
       });
       return { ok: true, method: "escpos-raw-logo", deviceName: cupsName };
     } catch (e) {
+      const detail = String(e && e.message ? e.message : e);
       appendPrintLog({
         event: "print-fallback",
         platform: "darwin",
         method: "escpos-raw-logo",
         printer: cupsName,
-        error: String(e && e.message ? e.message : e),
+        error: detail,
       });
-      /* fall through to plain text without logo */
+      return {
+        ok: false,
+        error: `Logo print failed (${detail}). Try Test print, then Save & Bill again.`,
+      };
     }
   }
   const errors = [];

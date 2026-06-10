@@ -106,19 +106,39 @@ export type PosSettings = {
   paymentMethods: PaymentMethodConfig[];
 };
 
+export type TravelDistance = {
+  text: string;
+  meters: number;
+  durationText: string;
+  durationSeconds: number;
+  estimated?: boolean;
+};
+
 export type RecentOrderRow = {
   id: string;
   orderRef: string | null;
   status: string;
   statusLabel: string;
   fulfillment: string;
+  scheduleMode?: string;
+  scheduledAt?: string | null;
+  notes?: string;
   totalMinor: number;
+  deliveryChargeMinor?: number;
+  discountMinor?: number;
   currency: string;
   createdAt: string;
   customerName: string | null;
   customerPhone: string;
   source: string;
   dineInTable: string;
+  address?: string;
+  landmark?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  mapUrl?: string | null;
+  locationUrl?: string | null;
+  distance?: TravelDistance | null;
   lines: Array<{ sortIndex: number; payload: unknown }>;
 };
 
@@ -302,7 +322,7 @@ export type KhaanzDesktopApi = {
       logoMaxHeightMm?: number;
     },
   ) => Promise<{ ok: true } | { ok: false; error: string }>;
-  getPrinterStatus: () => Promise<{
+  getPrinterStatus: (opts?: { includeDiagnostics?: boolean }) => Promise<{
     ok: true;
     saved: boolean;
     available: boolean;
@@ -324,7 +344,22 @@ export type KhaanzDesktopApi = {
     view: "online" | "recent";
     date: string;
   }) => Promise<
-    | { ok: true; orders: RecentOrderRow[]; date?: string; stale?: boolean }
+    | {
+        ok: true;
+        orders: RecentOrderRow[];
+        date?: string;
+        stale?: boolean;
+        travelDistanceConfigured?: boolean;
+      }
+    | { ok: false; error: string }
+  >;
+  openExternalUrl: (url: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+  hydrateOrderDistances: (orders: RecentOrderRow[]) => Promise<
+    | {
+        ok: true;
+        orders: RecentOrderRow[];
+        travelDistanceConfigured?: boolean;
+      }
     | { ok: false; error: string }
   >;
   getTodaySalesReport: () => Promise<

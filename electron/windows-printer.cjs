@@ -444,8 +444,31 @@ async function printPlainTextWindows(deviceName, text, title, options = {}) {
       if (raw.ok) {
         return { ok: true, method: "escpos-raw-logo", deviceName: name };
       }
-    } catch {
-      /* fall through to plain text without logo */
+      const detail = raw.error || "escpos-raw-logo failed";
+      appendPrintLog({
+        event: "print-fallback",
+        platform: "win32",
+        method: "escpos-raw-logo",
+        printer: name,
+        error: detail,
+      });
+      return {
+        ok: false,
+        error: `Logo print failed (${detail}). Try Test print, then Save & Bill again.`,
+      };
+    } catch (e) {
+      const detail = String(e && e.message ? e.message : e);
+      appendPrintLog({
+        event: "print-fallback",
+        platform: "win32",
+        method: "escpos-raw-logo",
+        printer: name,
+        error: detail,
+      });
+      return {
+        ok: false,
+        error: `Logo print failed (${detail}). Try Test print, then Save & Bill again.`,
+      };
     }
   }
 

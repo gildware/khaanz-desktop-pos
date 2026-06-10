@@ -181,15 +181,16 @@ function buildThermalStyle(layout?: BillPrintLayout): string {
   return `
   @page { size: 80mm auto; margin: 3mm; }
   html { color-scheme: light only; }
-  body.thermal-print-body { margin: 0; padding: 0; background: #fff; }
+  body.thermal-print-body { margin: 0; padding: 0; background: #fff; display: flex; justify-content: center; }
   ${r} {
     box-sizing: border-box;
     font-family: ${family};
     font-size: ${bodySize}px;
     font-weight: ${weight};
     line-height: ${lineHeight};
-    margin: 0;
+    margin: 0 auto;
     padding: ${pad}px;
+    width: 100%;
     max-width: 72mm;
     background: #fff;
     color: #000;
@@ -227,7 +228,7 @@ function buildThermalStyle(layout?: BillPrintLayout): string {
   ${r} .meta-row { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; font-size: 11px; margin: 2px 0; }
   ${r} .meta-row .fulfill { font-weight: ${weightNum + 100}; font-size: 12px; }
   ${r} .time-line { font-size: 11px; margin: 0 0 4px; }
-  ${r} .pre { white-space: pre-wrap; font-size: 11px; margin: 4px 0; text-align: center; }
+  ${r} .pre { white-space: pre-wrap; font-size: 11px; margin: 4px 0; text-align: ${align}; }
   ${r} .muted { font-size: 11px; margin: 3px 0; }
   ${r} table { width: 100%; border-collapse: collapse; margin: 6px 0; }
   ${r} th, ${r} td { padding: 2px 0; text-align: left; vertical-align: top; font-size: 11px; }
@@ -421,8 +422,11 @@ export function buildBillPlainText(o: PosBillPrintOptions): string {
   const restPhone = layout?.restaurantPhone?.trim() ?? "";
   const rule = () => plainRuleForLayout(layout);
 
+  const alignHeader = (text: string) =>
+    (layout?.headerAlign === "left" ? text : centerPlain(text)).slice(0, PLAIN_WIDTH);
+
   if (layout?.showRestaurantName !== false) {
-    lines.push(centerPlain(billDisplayName(o)));
+    lines.push(alignHeader(billDisplayName(o)));
   }
   const restAddr = layout?.restaurantAddress?.trim() ?? "";
   if (layout?.showAddress !== false && restAddr) {
@@ -440,7 +444,7 @@ export function buildBillPlainText(o: PosBillPrintOptions): string {
       ).slice(0, PLAIN_WIDTH),
     );
   }
-  for (const h of splitLines(o.billHeader)) lines.push(centerPlain(h));
+  for (const h of splitLines(o.billHeader)) lines.push(alignHeader(h));
   lines.push(rule());
 
   const mobile = customerMobileForBill(o.phoneDigits);
@@ -702,8 +706,9 @@ type DesktopPrintBridge = {
   getPlatform?: () => Promise<string>;
 };
 
-/** Fast path — raw ESC/POS; logo bills target ~1–2s after printer is verified. */
-const PRINT_IPC_TIMEOUT_MS = 12_000;
+const PRINT_IPC_TIMEOUT_MS = 20_000;
+/** Logo bills may run ESC/POS raster + Windows driver chain — allow time to finish. */
+const PRINT_IPC_TIMEOUT_WITH_LOGO_MS = 60_000;
 
 function receiptPrintOptionsFromLayout(layout?: BillPrintLayout): ReceiptPrintOptions | undefined {
   if (!layout || layout.showLogo === false) return undefined;
@@ -716,27 +721,48 @@ function receiptPrintOptionsFromLayout(layout?: BillPrintLayout): ReceiptPrintOp
   };
 }
 
+async function sendHtmlReceiptToDesktop(
+  desktop: DesktopPrintBridge,
+  html: string,
+  title: string,
+  timeoutMs = PRINT_IPC_TIMEOUT_WITH_LOGO_MS,
+): Promise<void> {
+  if (!desktop.printSilentHtml) {
+    throw new Error("HTML print is not available.");
+  }
+  const r = await withIpcTimeout(
+    desktop.printSilentHtml(html, title),
+    timeoutMs,
+    "Print",
+  );
+  if (r.ok) return;
+  throw new Error(r.error || "Print failed");
+}
+
 async function sendReceiptToDesktop(
   desktop: DesktopPrintBridge,
   plainText: string,
   title: string,
   printOptions?: ReceiptPrintOptions,
+  timeoutMs = printOptions?.logoDataUrl
+    ? PRINT_IPC_TIMEOUT_WITH_LOGO_MS
+    : PRINT_IPC_TIMEOUT_MS,
 ): Promise<void> {
   if (desktop.printReceiptText) {
     const r = await withIpcTimeout(
       desktop.printReceiptText(plainText, title, printOptions),
-      PRINT_IPC_TIMEOUT_MS,
+      timeoutMs,
       "Print",
     );
     if (r.ok) return;
     throw new Error(r.error || "Print failed");
   }
   if (!desktop.printSilentHtml) {
-    throw new Error("Print failed");
+    throw new Error("Print is not available.");
   }
   const r = await withIpcTimeout(
     desktop.printSilentHtml(plainText, title),
-    PRINT_IPC_TIMEOUT_MS,
+    timeoutMs,
     "Print",
   );
   if (r.ok) return;
@@ -849,14 +875,43 @@ export async function printPosBillThermal(
   if (!options.lines.length) {
     throw new Error("Nothing to print — cart is empty.");
   }
-  if (!desktop?.printSilentHtml && !desktop?.printReceiptText) return;
+  if (!desktop?.printSilentHtml && !desktop?.printReceiptText) {
+    throw new Error("Print is not available in this environment.");
+  }
 
+  const printOptions = receiptPrintOptionsFromLayout(options.layout);
+  const hasLogo = Boolean(printOptions?.logoDataUrl);
   const plainText = buildBillPlainText(options);
-  await sendReceiptToDesktop(
+
+  if (desktop.printReceiptText) {
+    try {
+      await sendReceiptToDesktop(desktop, plainText, "Bill", printOptions);
+      return;
+    } catch (primaryErr) {
+      if (!hasLogo || !desktop.printSilentHtml) throw primaryErr;
+      try {
+        await sendHtmlReceiptToDesktop(
+          desktop,
+          buildBillPreviewDocument(options),
+          "Bill",
+        );
+        return;
+      } catch (htmlErr) {
+        const primaryMsg =
+          primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
+        const htmlMsg = htmlErr instanceof Error ? htmlErr.message : String(htmlErr);
+        throw new Error(
+          `Thermal print failed (${primaryMsg}). HTML fallback also failed (${htmlMsg}).`,
+        );
+      }
+    }
+  }
+
+  await sendHtmlReceiptToDesktop(
     desktop,
-    plainText,
+    buildBillPreviewDocument(options),
     "Bill",
-    receiptPrintOptionsFromLayout(options.layout),
+    hasLogo ? PRINT_IPC_TIMEOUT_WITH_LOGO_MS : PRINT_IPC_TIMEOUT_MS,
   );
 }
 
@@ -867,7 +922,9 @@ export async function printPosKotThermal(
   if (!options.lines.length) {
     throw new Error("Nothing to print — no KOT lines.");
   }
-  if (!desktop?.printSilentHtml && !desktop?.printReceiptText) return;
+  if (!desktop?.printSilentHtml && !desktop?.printReceiptText) {
+    throw new Error("Print is not available in this environment.");
+  }
 
   const plainText = buildKotPlainText(options);
   await sendReceiptToDesktop(desktop, plainText, "KOT");

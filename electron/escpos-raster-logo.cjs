@@ -3,6 +3,34 @@ const { toAsciiSafe } = require("./escpos-buffer.cjs");
 
 /** ~203 DPI thermal — 8 dots per mm on 80mm paper. */
 const DOTS_PER_MM = 8;
+/** Match Settings preview / CSS max-width (72mm printable on 80mm roll). */
+const PRINTABLE_WIDTH_DOTS = Math.round(72 * DOTS_PER_MM);
+
+function centerRasterHorizontally(raster, imageWidth, imageHeight, bytesPerRow) {
+  if (imageWidth >= PRINTABLE_WIDTH_DOTS) {
+    return { raster, width: imageWidth, bytesPerRow };
+  }
+  const leftPad = Math.floor((PRINTABLE_WIDTH_DOTS - imageWidth) / 2);
+  const centeredWidth = PRINTABLE_WIDTH_DOTS;
+  const centeredBytesPerRow = Math.ceil(centeredWidth / 8);
+  const centered = Buffer.alloc(centeredBytesPerRow * imageHeight);
+
+  for (let y = 0; y < imageHeight; y++) {
+    for (let x = 0; x < imageWidth; x++) {
+      const srcByte = raster[y * bytesPerRow + (x >> 3)];
+      if ((srcByte >> (7 - (x & 7))) & 1) {
+        const destX = leftPad + x;
+        centered[y * centeredBytesPerRow + (destX >> 3)] |= 0x80 >> (destX & 7);
+      }
+    }
+  }
+
+  return {
+    raster: centered,
+    width: centeredWidth,
+    bytesPerRow: centeredBytesPerRow,
+  };
+}
 
 /**
  * Build ESC/POS GS v 0 raster strip from a data URL (PNG/JPEG/WebP).
@@ -43,14 +71,19 @@ function buildEscPosRasterFromDataUrl(dataUrl, maxWidthMm = 72, maxHeightMm = 45
     }
   }
 
-  const xL = bytesPerRow & 0xff;
-  const xH = (bytesPerRow >> 8) & 0xff;
+  const centered = centerRasterHorizontally(raster, width, height, bytesPerRow);
+  const outWidth = centered.width;
+  const outBytesPerRow = centered.bytesPerRow;
+  const outRaster = centered.raster;
+
+  const xL = outBytesPerRow & 0xff;
+  const xH = (outBytesPerRow >> 8) & 0xff;
   const yL = height & 0xff;
   const yH = (height >> 8) & 0xff;
 
   return Buffer.concat([
     Buffer.from([0x1d, 0x76, 0x30, 0x00, xL, xH, yL, yH]),
-    raster,
+    outRaster,
     Buffer.from([0x0a]),
   ]);
 }

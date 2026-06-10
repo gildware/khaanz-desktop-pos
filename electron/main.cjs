@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, net, dialog } = require("electron");
+const { app, BrowserWindow, ipcMain, net, dialog, shell } = require("electron");
 const { initAutoUpdater, autoUpdater } = require("./auto-updater.cjs");
 const {
   readStoredBackendConfig,
@@ -22,6 +22,7 @@ const {
 const { checkMacPrinterOnline, printPlainTextMac } = require("./print-mac.cjs");
 const { printReceiptElectron } = require("./print-electron-receipt.cjs");
 const { withTimeout } = require("./print-timeout.cjs");
+const { appendPrintLog } = require("./print-log.cjs");
 const { inlineReceiptHtmlImages, srcToDataUrl } = require("./receipt-image-inline.cjs");
 const { buildEscPosReceiptWithLogo } = require("./escpos-raster-logo.cjs");
 const {
@@ -366,13 +367,154 @@ function normalizeOrderStatusValue(status) {
   return upper === "CREATED" ? "PENDING" : upper;
 }
 
+function buildCustomerMapUrlFromCoords(lat, lng) {
+  return `https://www.google.com/maps?q=${lat},${lng}`;
+}
+
+function buildMapSearchUrlFromAddress(address) {
+  const params = new URLSearchParams({
+    api: "1",
+    query: String(address).trim(),
+  });
+  return `https://www.google.com/maps/search/?${params.toString()}`;
+}
+
+function enrichOrderLocationRow(row) {
+  if (!row || typeof row !== "object") return row;
+  const lat = Number(row.latitude);
+  const lng = Number(row.longitude);
+  const hasCoords = Number.isFinite(lat) && Number.isFinite(lng);
+  const address = typeof row.address === "string" ? row.address.trim() : "";
+
+  const locationUrl =
+    typeof row.locationUrl === "string" && row.locationUrl.trim()
+      ? row.locationUrl.trim()
+      : null;
+  let customerMapUrl = locationUrl;
+  if (!customerMapUrl && hasCoords) {
+    customerMapUrl = buildCustomerMapUrlFromCoords(lat, lng);
+  } else if (!customerMapUrl && address) {
+    customerMapUrl = buildMapSearchUrlFromAddress(address);
+  }
+
+  return {
+    ...row,
+    latitude: hasCoords ? lat : row.latitude ?? null,
+    longitude: hasCoords ? lng : row.longitude ?? null,
+    locationUrl: customerMapUrl,
+    mapUrl: customerMapUrl,
+  };
+}
+
 function normalizeOrderRow(row) {
   if (!row || typeof row !== "object") return row;
-  return { ...row, status: normalizeOrderStatusValue(row.status) };
+  return enrichOrderLocationRow({
+    ...row,
+    status: normalizeOrderStatusValue(row.status),
+  });
 }
 
 function normalizeOrderRows(rows) {
   return Array.isArray(rows) ? rows.map(normalizeOrderRow) : [];
+}
+
+function formatDistanceTextMeters(meters) {
+  const km = meters / 1000;
+  if (km < 1) return `${Math.max(1, Math.round(meters))} m`;
+  if (km < 10) return `${km.toFixed(1)} km`;
+  return `${Math.round(km)} km`;
+}
+
+function haversineMeters(origin, destLat, destLng) {
+  const R = 6_371_000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(destLat - origin.lat);
+  const dLng = toRad(destLng - origin.lng);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(origin.lat)) *
+      Math.cos(toRad(destLat)) *
+      Math.sin(dLng / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.max(1, Math.round(R * c));
+}
+
+function straightLineDistance(origin, destLat, destLng) {
+  const meters = haversineMeters(origin, destLat, destLng);
+  return {
+    text: formatDistanceTextMeters(meters),
+    meters,
+    durationText: "",
+    durationSeconds: 0,
+    estimated: true,
+  };
+}
+
+function readRestaurantOriginFromCache(db) {
+  const raw = readSettingsJson(db);
+  if (raw) {
+    try {
+      const s = JSON.parse(raw);
+      const lat = Number(s.restaurantLatitude);
+      const lng = Number(s.restaurantLongitude);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        return { lat, lng };
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  const envLat = Number.parseFloat(process.env.RESTAURANT_LATITUDE || "");
+  const envLng = Number.parseFloat(process.env.RESTAURANT_LONGITUDE || "");
+  if (Number.isFinite(envLat) && Number.isFinite(envLng)) {
+    return { lat: envLat, lng: envLng };
+  }
+  return null;
+}
+
+function parseOrderCoordsRow(row) {
+  if (!row || typeof row !== "object") return null;
+  const lat = Number(row.latitude);
+  const lng = Number(row.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat, lng };
+}
+
+async function hydrateOrderDistanceMain(apiOrigin, db, row) {
+  if (!row || typeof row !== "object") return row;
+  if (row.distance || row.fulfillment !== "delivery") return row;
+  const coords = parseOrderCoordsRow(row);
+  if (!coords) return row;
+
+  const base = typeof apiOrigin === "string" ? apiOrigin.replace(/\/$/, "") : "";
+  if (base) {
+    try {
+      const resp = await fetchJson(
+        `${base}/api/distance?lat=${coords.lat}&lng=${coords.lng}`,
+        { method: "GET" },
+      );
+      if (resp.ok && resp.json && resp.json.distance) {
+        return { ...row, distance: resp.json.distance };
+      }
+    } catch {
+      /* fall through to straight-line estimate */
+    }
+  }
+
+  const origin = readRestaurantOriginFromCache(db);
+  if (origin) {
+    return {
+      ...row,
+      distance: straightLineDistance(origin, coords.lat, coords.lng),
+    };
+  }
+
+  return row;
+}
+
+async function hydrateOrdersDistanceMain(apiOrigin, db, rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return rows;
+  return Promise.all(rows.map((row) => hydrateOrderDistanceMain(apiOrigin, db, row)));
 }
 
 function buildLocalPosOrderRows() {
@@ -1074,6 +1216,24 @@ async function resolveActivePrinterName() {
     return { name: "", deviceName: "", online: false, autoSelected: false, saved: Boolean(saved) };
   }
 
+  const inPrinterList = (name) =>
+    Boolean(
+      name &&
+        list.some((p) => p.name === name || printerNamesLooselyMatch(p.name, name)),
+    );
+
+  // Skip slow PowerShell online checks when Test print already succeeded.
+  const verified = readPrinterVerifiedName(db);
+  if (saved && verified && inPrinterList(saved)) {
+    return {
+      name: saved,
+      deviceName: saved,
+      online: true,
+      autoSelected: false,
+      saved: true,
+    };
+  }
+
   async function checkOnline(name) {
     if (!name) return false;
     const r = await isPrinterOnlineOnOs(name);
@@ -1156,7 +1316,8 @@ async function resolveActivePrinterName() {
 }
 
 /** Printer status — works with any connected OS queue, not only a manually saved name. */
-async function getPrinterConnectionStatus() {
+async function getPrinterConnectionStatus(opts = {}) {
+  const includeDiagnostics = Boolean(opts.includeDiagnostics);
   const savedInDb = Boolean(resolveSavedPrinterName());
   const printers = await getPrintersFromAnyWindow();
   const list = Array.isArray(printers) ? printers : [];
@@ -1180,7 +1341,7 @@ async function getPrinterConnectionStatus() {
   );
 
   let diagnostics = null;
-  if (process.platform === "win32" && deviceName) {
+  if (includeDiagnostics && process.platform === "win32" && deviceName) {
     const d = await getWindowsPrinterDiagnostics(deviceName);
     if (d.ok) {
       diagnostics = {
@@ -1211,8 +1372,8 @@ async function getPrinterConnectionStatus() {
     available: inList,
     online,
     verified,
-    connected: Boolean(deviceName && online),
-    ready: Boolean(deviceName && online),
+    connected: Boolean(deviceName && (online || (verified && inList))),
+    ready: Boolean(deviceName && (online || (verified && inList))),
     autoSelected: active.autoSelected,
     deviceName,
     statusDetail,
@@ -1391,12 +1552,32 @@ async function resolvePrinterForReceipt(deviceOverride) {
 async function buildEscPosBytesForReceipt(body, logoOpts = {}) {
   const logoSrc = String(logoOpts.logoDataUrl || "").trim();
   if (!logoSrc) return null;
-  const dataUrl = logoSrc.startsWith("data:") ? logoSrc : await srcToDataUrl(logoSrc);
-  if (!dataUrl) return null;
-  return buildEscPosReceiptWithLogo(body, dataUrl, {
-    logoMaxWidthMm: logoOpts.logoMaxWidthMm,
-    logoMaxHeightMm: logoOpts.logoMaxHeightMm,
-  });
+  try {
+    const dataUrl = logoSrc.startsWith("data:") ? logoSrc : await srcToDataUrl(logoSrc);
+    if (!dataUrl) {
+      appendPrintLog({
+        event: "logo-skip",
+        reason: "Could not load logo image (check network or re-upload in Settings).",
+        src: logoSrc.slice(0, 120),
+      });
+      return null;
+    }
+    const bytes = buildEscPosReceiptWithLogo(body, dataUrl, {
+      logoMaxWidthMm: logoOpts.logoMaxWidthMm,
+      logoMaxHeightMm: logoOpts.logoMaxHeightMm,
+    });
+    if (!bytes || !bytes.length) {
+      appendPrintLog({ event: "logo-skip", reason: "Logo raster encode returned empty buffer." });
+      return null;
+    }
+    return bytes;
+  } catch (e) {
+    appendPrintLog({
+      event: "logo-skip",
+      reason: String(e && e.message ? e.message : e),
+    });
+    return null;
+  }
 }
 
 /** Direct receipt print — Windows uses driver chain; macOS uses ESC/POS + Electron. */
@@ -1417,16 +1598,20 @@ async function printReceiptText({
   if (!resolved.ok) return { ok: false, error: resolved.error };
   const printerName = resolved.name;
 
+  const logoRequested = Boolean(String(logoDataUrl || "").trim());
   let escPosBytes = null;
-  if (logoDataUrl) {
-    try {
-      escPosBytes = await buildEscPosBytesForReceipt(body, {
-        logoDataUrl,
-        logoMaxWidthMm,
-        logoMaxHeightMm,
-      });
-    } catch {
-      escPosBytes = null;
+  if (logoRequested) {
+    escPosBytes = await buildEscPosBytesForReceipt(body, {
+      logoDataUrl,
+      logoMaxWidthMm,
+      logoMaxHeightMm,
+    });
+    if (!escPosBytes) {
+      return {
+        ok: false,
+        error:
+          "Could not prepare logo for printing. Re-upload the logo in Settings (Bill preview) or check your internet connection, then try again.",
+      };
     }
   }
   const receiptOpts = { ...resolved, escPosBytes };
@@ -2299,6 +2484,35 @@ function registerIpc() {
   });
 
   // --- Web POS compatibility bridge (window.khaanzDesktop) ---
+  ipcMain.handle("khaanz:open-external-url", async (_evt, payload) => {
+    const url = payload && typeof payload.url === "string" ? payload.url.trim() : "";
+    if (!url || !/^https?:\/\//i.test(url)) {
+      return { ok: false, error: "Invalid URL" };
+    }
+    try {
+      await shell.openExternal(url, { activate: true });
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: String(e && e.message ? e.message : e) };
+    }
+  });
+
+  ipcMain.handle("khaanz:hydrate-order-distances", async (_evt, payload) => {
+    try {
+      const orders = payload && Array.isArray(payload.orders) ? payload.orders : [];
+      const apiOrigin = (process.env.KHAANZ_API_ORIGIN || "").trim();
+      const hydrated = await hydrateOrdersDistanceMain(apiOrigin, db, orders);
+      const originForTravel = readRestaurantOriginFromCache(db);
+      return {
+        ok: true,
+        orders: hydrated,
+        travelDistanceConfigured: originForTravel !== null,
+      };
+    } catch (e) {
+      return { ok: false, error: String(e && e.message ? e.message : e) };
+    }
+  });
+
   ipcMain.handle("khaanz:print-silent-html", async (_evt, payload) => {
     const html = payload && typeof payload.html === "string" ? payload.html : "";
     const title = payload && typeof payload.title === "string" ? payload.title : "Receipt";
@@ -2325,14 +2539,14 @@ function registerIpc() {
         logoMaxWidthMm,
         logoMaxHeightMm,
       }),
-      logoDataUrl ? 12_000 : 95_000,
+      logoDataUrl ? 60_000 : 95_000,
       "Print",
     );
   });
 
-  ipcMain.handle("khaanz:get-printer-status", async () => {
+  ipcMain.handle("khaanz:get-printer-status", async (_evt, opts) => {
     try {
-      return { ok: true, ...(await getPrinterConnectionStatus()) };
+      return { ok: true, ...(await getPrinterConnectionStatus(opts || {})) };
     } catch (e) {
       return {
         ok: true,
@@ -2508,6 +2722,7 @@ function registerIpc() {
 
       let serverOrders = [];
       let liveApi = false;
+      let travelDistanceConfigured = true;
       if (apiOrigin && syncKey) {
         const params = new URLSearchParams({
           view: viewKey,
@@ -2527,6 +2742,9 @@ function registerIpc() {
         if (resp.ok && resp.json && Array.isArray(resp.json.orders)) {
           serverOrders = resp.json.orders;
           liveApi = true;
+          if (viewKey === "online" && resp.json.travelDistanceConfigured === false) {
+            travelDistanceConfigured = false;
+          }
         }
       }
 
@@ -2536,11 +2754,20 @@ function registerIpc() {
       }
 
       if (viewKey === "online") {
+        const originForTravel = readRestaurantOriginFromCache(db);
+        const travelReady =
+          travelDistanceConfigured || originForTravel !== null;
         if (liveApi) {
+          const hydrated = await hydrateOrdersDistanceMain(
+            apiOrigin,
+            db,
+            normalizeOrderRows(serverOrders),
+          );
           return {
             ok: true,
-            orders: normalizeOrderRows(serverOrders),
+            orders: hydrated,
             date: dateStr,
+            travelDistanceConfigured: travelReady,
           };
         }
         const cached = normalizeOrderRows(
@@ -2555,11 +2782,17 @@ function registerIpc() {
         cached.sort((a, b) =>
           String(b.createdAt || "").localeCompare(String(a.createdAt || "")),
         );
+        const hydratedCached = await hydrateOrdersDistanceMain(
+          apiOrigin,
+          db,
+          cached.slice(0, 100),
+        );
         return {
           ok: true,
-          orders: cached.slice(0, 100),
+          orders: hydratedCached,
           date: dateStr,
-          stale: cached.length === 0,
+          stale: hydratedCached.length === 0,
+          travelDistanceConfigured: travelReady,
         };
       }
 

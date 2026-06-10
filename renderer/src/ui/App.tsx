@@ -304,8 +304,8 @@ export function App() {
     }
     try {
       const status = await withIpcTimeout(
-        desktop.getPrinterStatus(),
-        8000,
+        desktop.getPrinterStatus({ includeDiagnostics: false }),
+        20_000,
         "Printer status",
       );
       if (status.ok) {
@@ -313,17 +313,10 @@ export function App() {
         setPrinterConnected(Boolean(status.connected));
         setPrinterReady(Boolean(status.ready ?? status.connected));
         setPrinterStatusDetail(status.statusDetail ?? "");
-      } else {
-        setPrinterSaved(false);
-        setPrinterConnected(false);
-        setPrinterReady(false);
-        setPrinterStatusDetail("");
       }
+      /* Keep last known printer state on failed IPC — avoids disabling Save & Print after a slow status poll. */
     } catch {
-      setPrinterSaved(false);
-      setPrinterConnected(false);
-      setPrinterReady(false);
-      setPrinterStatusDetail("");
+      /* timeout or IPC error — keep last known state */
     }
   }, [desktop]);
 
@@ -1309,6 +1302,7 @@ export function App() {
           posSettings={posSettings}
           billPrintLayout={billPrintLayout}
           printerConnected={printerConnected}
+          apiOrigin={boot?.apiOrigin ?? null}
         />
       ) : mainTab === "reports" ? (
         <ReportsPanel refreshKey={ordersRefreshKey} />
