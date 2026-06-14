@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, net, dialog, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, net, dialog, shell, Menu } = require("electron");
 const { initAutoUpdater, autoUpdater } = require("./auto-updater.cjs");
 const {
   readStoredBackendConfig,
@@ -2065,6 +2065,7 @@ function createMainWindow() {
     minWidth: 900,
     minHeight: 600,
     title: "Khaanz POS",
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -2076,6 +2077,7 @@ function createMainWindow() {
   });
 
   hardenWindowNavigation(win);
+  win.setMenuBarVisibility(false);
 
   if (isDev) {
     const url = process.env.POS_DESKTOP_RENDERER_URL || "http://127.0.0.1:5173";
@@ -3228,6 +3230,7 @@ function registerIpc() {
 }
 
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(null);
   loadEnvFile(path.join(app.getPath("userData"), ".env"), { override: true });
   applyStoredBackendToProcessEnv();
   db = openDb();

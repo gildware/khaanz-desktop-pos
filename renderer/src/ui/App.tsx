@@ -1,13 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  BanknoteIcon,
   CheckCircle2Icon,
-  ChevronDownIcon,
   Loader2Icon,
   LogOutIcon,
+  PercentIcon,
   PlusIcon,
   PrinterIcon,
   SearchIcon,
   RefreshCwIcon,
+  UserRoundIcon,
+  UtensilsCrossedIcon,
   WifiIcon,
   WifiOffIcon,
 } from "lucide-react";
@@ -102,9 +105,15 @@ function normalizeMenuFromPayload(
 }
 
 function fulfillmentLabel(mode: FulfillmentMode) {
-  if (mode === "dine_in") return "Dine-in";
+  if (mode === "dine_in") return "Dine In";
   if (mode === "delivery") return "Delivery";
-  return "Pickup";
+  return "Pick Up";
+}
+
+function fulfillmentBadgeClass(mode: FulfillmentMode) {
+  if (mode === "dine_in") return "bg-orange-400 text-orange-950";
+  if (mode === "delivery") return "bg-sky-400 text-sky-950";
+  return "bg-amber-400 text-amber-950";
 }
 
 const CAT_OPEN = "__pos_open__";
@@ -213,7 +222,9 @@ export function App() {
   const [billPreviewSettings, setBillPreviewSettings] = useState<BillPreviewSettings | null>(
     null,
   );
+  const [paymentStatus, setPaymentStatus] = useState<"paid" | "unpaid">("unpaid");
   const [paymentMethodKey, setPaymentMethodKey] = useState("");
+  const [billAdjustmentsOpen, setBillAdjustmentsOpen] = useState(false);
   type SubmitMode = "save" | "kot" | "bill" | "both";
   const [submittingMode, setSubmittingMode] = useState<SubmitMode | null>(null);
   const [lastBill, setLastBill] = useState<{ orderRef: string } | null>(null);
@@ -799,11 +810,6 @@ export function App() {
     ],
   );
 
-  const paymentDisplayName = useCallback(
-    (key: string) => posSettings?.paymentMethods.find((p) => p.id === key)?.name ?? key,
-    [posSettings],
-  );
-
   const submitPosOrder = useCallback(
     async (printMode: "none" | "kot" | "bill" | "both") => {
       if (!session || !desktop?.placePosOrder) {
@@ -833,7 +839,8 @@ export function App() {
       const discountPrint = totals.discountCents / 100;
       const snapshotLines = cartLinesToReceiptRows(snapshot);
       const snapshotKot = kotLinesFromCart(snapshot);
-      const payKey = paymentMethodKey;
+      const payKey = paymentStatus === "paid" ? paymentMethodKey : "";
+      const billPaymentLabel = paymentStatus === "paid" ? "Paid" : "";
       const fulfillLabel = fulfillmentLabelFromKey(fulfillment);
       const header = posSettings?.billHeader ?? "";
       const footer = posSettings?.billFooter ?? "";
@@ -927,7 +934,7 @@ export function App() {
                   fulfillment === "delivery" ? address.trim() || undefined : undefined,
                 notes: notesSnap,
                 footerNote: footerNote || undefined,
-                paymentLabel: paymentDisplayName(payKey),
+                paymentLabel: billPaymentLabel,
                 lines: snapshotLines,
                 total: snapTotal,
                 itemsSubtotal: itemsSubtotalPrint,
@@ -961,11 +968,11 @@ export function App() {
       desktop,
       cart,
       totals.total,
+      paymentStatus,
       paymentMethodKey,
       fulfillment,
       posSettings,
       billPrintLayout,
-      paymentDisplayName,
       refreshSyncStatus,
       printerReady,
       customerName,
@@ -1105,7 +1112,7 @@ export function App() {
 
   return (
     <div className="grid h-screen grid-rows-[auto_auto_1fr] overflow-hidden bg-background">
-      <header className="flex items-center justify-between gap-4 border-b px-4 py-3">
+      <header className="flex shrink-0 items-center justify-between gap-4 border-b px-4 py-3">
         <div>
           <div className="font-semibold">Khaanz POS</div>
           <div className="text-muted-foreground text-sm">
@@ -1220,63 +1227,61 @@ export function App() {
         </div>
       ) : null}
 
-      <nav className="flex shrink-0 items-center gap-1 border-b bg-muted/30 px-4 py-2">
-        <button
-          type="button"
-          onClick={() => setMainTab("pos")}
-          className={`inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-md px-4 font-medium text-sm transition-colors ${
-            mainTab === "pos"
-              ? "bg-background text-foreground shadow-sm ring-1 ring-border/80"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          POS
-        </button>
-        <button
-          type="button"
-          onClick={() => setMainTab("recent-orders")}
-          className={`inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-md px-4 font-medium text-sm transition-colors ${
-            mainTab === "recent-orders"
-              ? "bg-background text-foreground shadow-sm ring-1 ring-border/80"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          Recent orders
-        </button>
-        <button
-          type="button"
-          onClick={() => setMainTab("online-orders")}
-          className={`inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-md px-4 font-medium text-sm transition-colors ${
-            mainTab === "online-orders"
-              ? "bg-background text-foreground shadow-sm ring-1 ring-border/80"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          Online orders
-        </button>
-        <button
-          type="button"
-          onClick={() => setMainTab("reports")}
-          className={`inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-md px-4 font-medium text-sm transition-colors ${
-            mainTab === "reports"
-              ? "bg-background text-foreground shadow-sm ring-1 ring-border/80"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          Report
-        </button>
-        <button
-          type="button"
-          onClick={() => setMainTab("settings")}
-          className={`inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-md px-4 font-medium text-sm transition-colors ${
-            mainTab === "settings"
-              ? "bg-background text-foreground shadow-sm ring-1 ring-border/80"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          Settings
-        </button>
-      </nav>
+      {mainTab !== "pos" ? (
+        <nav className="flex shrink-0 items-center gap-1 border-b bg-muted/30 px-4 py-2">
+          <button
+            type="button"
+            onClick={() => setMainTab("pos")}
+            className="inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-md px-4 font-medium text-muted-foreground text-sm transition-colors hover:text-foreground"
+          >
+            POS
+          </button>
+          <button
+            type="button"
+            onClick={() => setMainTab("recent-orders")}
+            className={`inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-md px-4 font-medium text-sm transition-colors ${
+              mainTab === "recent-orders"
+                ? "bg-background text-foreground shadow-sm ring-1 ring-border/80"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Recent orders
+          </button>
+          <button
+            type="button"
+            onClick={() => setMainTab("online-orders")}
+            className={`inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-md px-4 font-medium text-sm transition-colors ${
+              mainTab === "online-orders"
+                ? "bg-background text-foreground shadow-sm ring-1 ring-border/80"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Online orders
+          </button>
+          <button
+            type="button"
+            onClick={() => setMainTab("reports")}
+            className={`inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-md px-4 font-medium text-sm transition-colors ${
+              mainTab === "reports"
+                ? "bg-background text-foreground shadow-sm ring-1 ring-border/80"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Report
+          </button>
+          <button
+            type="button"
+            onClick={() => setMainTab("settings")}
+            className={`inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-md px-4 font-medium text-sm transition-colors ${
+              mainTab === "settings"
+                ? "bg-background text-foreground shadow-sm ring-1 ring-border/80"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Settings
+          </button>
+        </nav>
+      ) : null}
 
       {mainTab === "settings" ? (
         <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4">
@@ -1313,8 +1318,46 @@ export function App() {
       ) : mainTab === "reports" ? (
         <ReportsPanel refreshKey={ordersRefreshKey} />
       ) : mainTab === "pos" ? (
-      <div className="grid min-h-0 min-w-0 grid-cols-1 overflow-hidden max-lg:grid-rows-[minmax(0,1fr)_minmax(0,1fr)] lg:grid-cols-[1fr_520px]">
-        <section className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r">
+      <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 overflow-hidden max-lg:grid-rows-[minmax(0,1fr)_minmax(0,1fr)] lg:grid-cols-[1fr_520px]">
+        <div className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r">
+          <nav className="flex shrink-0 items-center gap-1 border-b bg-muted/30 px-3 py-1">
+            <button
+              type="button"
+              onClick={() => setMainTab("pos")}
+              className="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-md bg-background px-3 font-medium text-foreground text-xs shadow-sm ring-1 ring-border/80"
+            >
+              POS
+            </button>
+            <button
+              type="button"
+              onClick={() => setMainTab("recent-orders")}
+              className="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-md px-3 font-medium text-muted-foreground text-xs transition-colors hover:text-foreground"
+            >
+              Recent orders
+            </button>
+            <button
+              type="button"
+              onClick={() => setMainTab("online-orders")}
+              className="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-md px-3 font-medium text-muted-foreground text-xs transition-colors hover:text-foreground"
+            >
+              Online orders
+            </button>
+            <button
+              type="button"
+              onClick={() => setMainTab("reports")}
+              className="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-md px-3 font-medium text-muted-foreground text-xs transition-colors hover:text-foreground"
+            >
+              Report
+            </button>
+            <button
+              type="button"
+              onClick={() => setMainTab("settings")}
+              className="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-md px-3 font-medium text-muted-foreground text-xs transition-colors hover:text-foreground"
+            >
+              Settings
+            </button>
+          </nav>
+
           <div className="shrink-0 border-b bg-muted/30 p-3">
             <div className="relative">
               <SearchIcon className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -1328,6 +1371,8 @@ export function App() {
               />
             </div>
           </div>
+
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <div className="relative flex min-h-0 flex-1 overflow-hidden">
             <aside
               className="flex w-[min(11rem,30vw)] shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border/50 bg-muted/25 py-2 pl-2 pr-1"
@@ -1492,357 +1537,389 @@ export function App() {
             </div>
           </div>
         </section>
+        </div>
 
-        <aside className="flex min-h-0 min-w-0 w-full shrink-0 flex-col overflow-hidden border-l bg-muted/20 lg:w-[520px]">
-          <div className="shrink-0 border-b p-3">
-            <p className="mb-2 font-medium text-sm">Order type</p>
-            <div className="flex flex-wrap gap-2">
-              {(
-                [
-                  { id: "dine_in" as const, label: "Dine-in" },
-                  { id: "pickup" as const, label: "Pickup" },
-                  { id: "delivery" as const, label: "Delivery" },
-                ] as const
-              ).map(({ id, label }) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setFulfillment(id)}
-                  className={`h-8 rounded-md px-3 text-sm transition-colors ${
-                    fulfillment === id
-                      ? "bg-primary text-primary-foreground"
-                      : "border bg-background hover:bg-muted"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+        <aside className="flex min-h-0 min-w-0 w-full shrink-0 flex-col overflow-hidden border-l bg-white lg:w-[520px]">
+          <div className="grid min-h-8 shrink-0 grid-cols-3 border-b bg-zinc-700">
+            {(
+              [
+                { id: "dine_in" as const, label: "Dine In" },
+                { id: "delivery" as const, label: "Delivery" },
+                { id: "pickup" as const, label: "Pick Up" },
+              ] as const
+            ).map(({ id, label }) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setFulfillment(id)}
+                className={`h-full text-xs font-semibold transition-colors ${
+                  fulfillment === id
+                    ? "bg-red-600 text-white"
+                    : "text-zinc-200 hover:bg-zinc-600"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
 
-          <details
-            open={customerDetailsOpen}
-            onToggle={(e) => setCustomerDetailsOpen(e.currentTarget.open)}
-            className="shrink-0 border-b bg-background open:[&>summary_svg]:rotate-180 [&_summary::-webkit-details-marker]:hidden"
-          >
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-2.5 text-sm font-medium hover:bg-muted/40">
-              <span>
-                {fulfillment === "delivery"
-                  ? "Customer details"
-                  : "Customer & notes (optional)"}
-              </span>
-              <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground transition-transform" />
-            </summary>
-            <div className="space-y-3 border-t px-4 py-3">
-              <div className="space-y-1.5">
-                <label htmlFor="pos-name" className="font-medium text-xs">
-                  Name
-                </label>
+          {/* Toolbar */}
+          <div className="flex shrink-0 items-center justify-between gap-2 border-b bg-white px-2.5 py-1">
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setCustomerDetailsOpen((o) => !o)}
+                className={`flex size-8 items-center justify-center rounded-md border transition-colors ${
+                  customerDetailsOpen
+                    ? "border-red-300 bg-red-50 text-red-700"
+                    : "border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50"
+                }`}
+                aria-label="Customer details"
+                title="Customer details"
+              >
+                <UserRoundIcon className="size-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setBillAdjustmentsOpen((o) => !o)}
+                className={`flex size-8 items-center justify-center rounded-md border transition-colors ${
+                  billAdjustmentsOpen
+                    ? "border-red-300 bg-red-50 text-red-700"
+                    : "border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50"
+                }`}
+                aria-label="Discount and delivery"
+                title="Discount & delivery"
+              >
+                <PercentIcon className="size-4" />
+              </button>
+            </div>
+            <span
+              className={`rounded px-3 py-1 text-xs font-bold uppercase tracking-wide ${fulfillmentBadgeClass(fulfillment)}`}
+            >
+              {fulfillmentLabel(fulfillment)}
+            </span>
+          </div>
+
+          {/* Customer / adjustments (collapsible) */}
+          {customerDetailsOpen ? (
+            <div className="shrink-0 space-y-2.5 border-b bg-zinc-50 px-3 py-2.5">
+              <div className="grid grid-cols-2 gap-2">
                 <input
                   id="pos-name"
                   type="text"
                   value={customerName}
                   onChange={(e) => setCustomerName(e.target.value)}
-                  placeholder="Optional — defaults to Guest"
+                  placeholder="Name (Guest)"
                   autoComplete="name"
-                  className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                  className="h-8 rounded border bg-white px-2 text-sm"
                 />
-              </div>
-              <div className="space-y-1.5">
-                <label htmlFor="pos-phone" className="font-medium text-xs">
-                  Phone
-                </label>
                 <input
                   id="pos-phone"
                   type="tel"
                   inputMode="numeric"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 10))}
-                  placeholder="Optional — 10-digit mobile"
+                  placeholder="Phone"
                   autoComplete="tel"
-                  className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                  className="h-8 rounded border bg-white px-2 text-sm"
                 />
               </div>
               {fulfillment === "delivery" ? (
                 <>
-                  <div className="space-y-1.5">
-                    <label htmlFor="pos-address" className="font-medium text-xs">
-                      Delivery address
-                    </label>
-                    <textarea
-                      id="pos-address"
-                      value={address}
-                      onChange={(e) => setAddress(e.target.value)}
-                      rows={2}
-                      placeholder="Full address (required for delivery)"
-                      className="w-full resize-none rounded-md border bg-background px-3 py-2 text-sm"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label htmlFor="pos-landmark" className="font-medium text-xs">
-                      Landmark (optional)
-                    </label>
-                    <input
-                      id="pos-landmark"
-                      type="text"
-                      value={landmark}
-                      onChange={(e) => setLandmark(e.target.value)}
-                      placeholder="Near…"
-                      className="h-9 w-full rounded-md border bg-background px-3 text-sm"
-                    />
-                  </div>
+                  <textarea
+                    id="pos-address"
+                    value={address}
+                    onChange={(e) => setAddress(e.target.value)}
+                    rows={2}
+                    placeholder="Delivery address (required)"
+                    className="w-full resize-none rounded border bg-white px-2 py-1.5 text-sm"
+                  />
+                  <input
+                    id="pos-landmark"
+                    type="text"
+                    value={landmark}
+                    onChange={(e) => setLandmark(e.target.value)}
+                    placeholder="Landmark (optional)"
+                    className="h-8 w-full rounded border bg-white px-2 text-sm"
+                  />
                 </>
               ) : null}
-              <div className="space-y-1.5">
-                <label htmlFor="pos-notes" className="font-medium text-xs">
-                  Notes
+              <textarea
+                id="pos-notes"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                rows={2}
+                placeholder="Notes — table, packing, instructions…"
+                className="w-full resize-none rounded border bg-white px-2 py-1.5 text-sm"
+              />
+            </div>
+          ) : null}
+
+          {billAdjustmentsOpen ? (
+            <div className="shrink-0 space-y-2 border-b bg-zinc-50 px-3 py-2.5">
+              {fulfillment === "delivery" ? (
+                <div className="flex items-center gap-2">
+                  <label htmlFor="pos-delivery-charge" className="shrink-0 text-xs text-zinc-600">
+                    Delivery ₹
+                  </label>
+                  <input
+                    id="pos-delivery-charge"
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    inputMode="decimal"
+                    value={deliveryChargeInput}
+                    onChange={(e) => setDeliveryChargeInput(e.target.value)}
+                    placeholder="0"
+                    className="h-8 min-w-0 flex-1 rounded border bg-white px-2 text-sm tabular-nums"
+                  />
+                </div>
+              ) : null}
+              <div className="flex items-center gap-2">
+                <label htmlFor="pos-discount" className="shrink-0 text-xs text-zinc-600">
+                  Discount ₹
                 </label>
-                <textarea
-                  id="pos-notes"
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  rows={2}
-                  placeholder="Table, packing, instructions…"
-                  className="w-full resize-none rounded-md border bg-background px-3 py-2 text-sm"
+                <input
+                  id="pos-discount"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  inputMode="decimal"
+                  value={discountInput}
+                  onChange={(e) => setDiscountInput(e.target.value)}
+                  placeholder="0"
+                  className="h-8 min-w-0 flex-1 rounded border bg-white px-2 text-sm tabular-nums"
                 />
               </div>
+              <div className="flex justify-between text-xs text-zinc-600">
+                <span>Subtotal {money(totals.itemsTotal)}</span>
+                {totals.deliveryChargeCents > 0 ? (
+                  <span>+{money(totals.deliveryChargeCents)} delivery</span>
+                ) : null}
+                {totals.discountCents > 0 ? (
+                  <span className="text-emerald-700">−{money(totals.discountCents)} discount</span>
+                ) : null}
+              </div>
             </div>
-          </details>
+          ) : null}
 
+          {/* Bill preview table */}
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <div className="shrink-0 px-4 pt-4 pb-2">
-              <h2 className="font-semibold">Preview</h2>
-              <p className="mt-1 text-muted-foreground text-xs">{fulfillmentLabel(fulfillment)}</p>
+            <div className="grid shrink-0 grid-cols-[1fr_5.5rem_4.5rem] gap-1 bg-zinc-200 px-3 py-2 text-[11px] font-bold uppercase tracking-wide text-zinc-700">
+              <span>Items</span>
+              <span className="text-center">Qty</span>
+              <span className="text-right">Price</span>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-4">
+            <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-white">
               {cart.length === 0 ? (
-                <p className="text-muted-foreground text-sm">Tap items to add them.</p>
-              ) : (
-                <div className="space-y-2 pb-2">
-                  {cart.map((l) => (
-                    <div
-                      key={l.lineId}
-                      className="flex min-h-[4.5rem] items-center justify-between gap-3 rounded-lg border bg-background p-3"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="line-clamp-2 font-medium leading-snug">{cartLineTitle(l)}</div>
-                        {isCartComboLine(l) && l.componentSummary ? (
-                          <div className="truncate text-muted-foreground text-xs">
-                            {l.componentSummary}
-                          </div>
-                        ) : null}
-                        {!isCartOpenLine(l) && !isCartComboLine(l) && l.addons.length > 0 ? (
-                          <div className="truncate text-muted-foreground text-xs">
-                            {l.addons.map((a) => `${a.quantity}× ${a.name}`).join(", ")}
-                          </div>
-                        ) : null}
-                        <div className="text-muted-foreground text-xs">
-                          {l.qty} × {money(l.unitPriceCents)}
-                        </div>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => bumpLineQty(l.lineId, -1)}
-                          disabled={busy}
-                          className="flex size-8 items-center justify-center rounded-md border"
-                        >
-                          −
-                        </button>
-                        <span className="w-6 text-center font-medium tabular-nums">
-                          {l.qty}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => bumpLineQty(l.lineId, 1)}
-                          disabled={busy}
-                          className="flex size-8 items-center justify-center rounded-md border"
-                        >
-                          +
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                <div className="flex h-full min-h-[12rem] flex-col items-center justify-center gap-3 px-6 text-center">
+                  <UtensilsCrossedIcon className="size-14 text-zinc-300" strokeWidth={1.25} />
+                  <div>
+                    <p className="font-semibold text-zinc-700">No Item Selected</p>
+                    <p className="mt-1 text-sm text-zinc-500">
+                      Please select items from the left menu
+                    </p>
+                  </div>
                 </div>
+              ) : (
+                <table className="w-full text-sm">
+                  <tbody>
+                    {cart.map((l) => {
+                      const lineTotal = l.qty * l.unitPriceCents;
+                      return (
+                        <tr key={l.lineId} className="border-b border-zinc-100 align-top">
+                          <td className="px-3 py-2.5">
+                            <div className="font-medium leading-snug text-zinc-900">
+                              {cartLineTitle(l)}
+                            </div>
+                            {isCartComboLine(l) && l.componentSummary ? (
+                              <div className="mt-0.5 truncate text-xs text-zinc-500">
+                                {l.componentSummary}
+                              </div>
+                            ) : null}
+                            {!isCartOpenLine(l) && !isCartComboLine(l) && l.addons.length > 0 ? (
+                              <div className="mt-0.5 truncate text-xs text-zinc-500">
+                                {l.addons.map((a) => `${a.quantity}× ${a.name}`).join(", ")}
+                              </div>
+                            ) : null}
+                          </td>
+                          <td className="px-1 py-2.5">
+                            <div className="flex items-center justify-center gap-0.5">
+                              <button
+                                type="button"
+                                onClick={() => bumpLineQty(l.lineId, -1)}
+                                disabled={busy}
+                                className="flex size-6 items-center justify-center rounded border border-zinc-200 text-xs hover:bg-zinc-50 disabled:opacity-50"
+                              >
+                                −
+                              </button>
+                              <span className="min-w-[1.25rem] text-center font-semibold tabular-nums">
+                                {l.qty}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => bumpLineQty(l.lineId, 1)}
+                                disabled={busy}
+                                className="flex size-6 items-center justify-center rounded border border-zinc-200 text-xs hover:bg-zinc-50 disabled:opacity-50"
+                              >
+                                +
+                              </button>
+                            </div>
+                          </td>
+                          <td className="px-3 py-2.5 text-right tabular-nums font-medium text-zinc-900">
+                            {money(lineTotal)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               )}
             </div>
 
-            <div className="shrink-0 border-t bg-muted/20 px-4 py-3">
-              <details className="rounded-lg border border-border/60 bg-background [&>summary_svg]:-rotate-180 open:[&>summary_svg]:rotate-0 [&_summary::-webkit-details-marker]:hidden">
-                <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2.5 font-semibold hover:bg-muted/40">
-                  <span>Total</span>
-                  <span className="flex items-center gap-1.5">
-                    <span className="tabular-nums">{money(totals.total)}</span>
-                    <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground transition-transform" />
-                  </span>
-                </summary>
-                <div className="space-y-2.5 border-t px-3 py-2.5">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Subtotal</span>
-                    <span className="tabular-nums">{money(totals.itemsTotal)}</span>
-                  </div>
-                  {fulfillment === "delivery" ? (
-                    <div className="flex items-center gap-2">
-                      <label
-                        htmlFor="pos-delivery-charge"
-                        className="shrink-0 text-muted-foreground text-xs"
-                      >
-                        Delivery ₹
-                      </label>
-                      <input
-                        id="pos-delivery-charge"
-                        type="number"
-                        min={0}
-                        step="0.01"
-                        inputMode="decimal"
-                        value={deliveryChargeInput}
-                        onChange={(e) => setDeliveryChargeInput(e.target.value)}
-                        placeholder="0"
-                        className="h-8 min-w-0 flex-1 rounded-md border bg-background px-2 text-sm tabular-nums"
-                      />
-                    </div>
-                  ) : null}
-                  <div className="flex items-center gap-2">
-                    <label htmlFor="pos-discount" className="shrink-0 text-muted-foreground text-xs">
-                      Discount ₹
-                    </label>
-                    <input
-                      id="pos-discount"
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      inputMode="decimal"
-                      value={discountInput}
-                      onChange={(e) => setDiscountInput(e.target.value)}
-                      placeholder="0"
-                      className="h-8 min-w-0 flex-1 rounded-md border bg-background px-2 text-sm tabular-nums"
-                    />
-                  </div>
-                  {totals.deliveryChargeCents > 0 ? (
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-muted-foreground">Delivery charge</span>
-                      <span className="tabular-nums">+{money(totals.deliveryChargeCents)}</span>
-                    </div>
-                  ) : null}
-                  {totals.discountCents > 0 ? (
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-muted-foreground">Discount applied</span>
-                      <span className="tabular-nums text-emerald-700">
-                        −{money(totals.discountCents)}
-                      </span>
-                    </div>
-                  ) : null}
-                </div>
-              </details>
-              {lastBill ? (
-                <p className="mt-2 text-muted-foreground text-xs">
-                  Last placed: <strong className="text-foreground">{lastBill.orderRef}</strong>
-                </p>
-              ) : null}
-            </div>
+            {lastBill ? (
+              <p className="shrink-0 border-t bg-zinc-50 px-3 py-1.5 text-xs text-zinc-500">
+                Last order: <strong className="text-zinc-800">{lastBill.orderRef}</strong>
+              </p>
+            ) : null}
           </div>
 
-          <footer className="shrink-0 w-full border-t bg-background p-4">
-            <div className="space-y-3">
-              <div className="space-y-2">
-                <p className="font-medium text-sm">Payment</p>
-                {(posSettings?.paymentMethods ?? []).length === 0 ? (
-                  <p className="text-muted-foreground text-sm">
-                    Add payment methods in Restaurant settings.
-                  </p>
-                ) : (
-                  <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Payment method">
-                    {(posSettings?.paymentMethods ?? []).map((p) => (
-                      <button
-                        key={p.id}
-                        type="button"
-                        onClick={() => setPaymentMethodKey(p.id)}
-                        className={`h-8 rounded-full px-3 text-sm ${
-                          paymentMethodKey === p.id
-                            ? "bg-primary text-primary-foreground"
-                            : "border bg-background hover:bg-muted"
-                        }`}
-                      >
-                        {p.name}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div className="flex min-w-0 flex-col gap-2">
-                <button
-                  type="button"
-                  disabled={isSubmitting || cart.length === 0}
-                  onClick={() => void submitPosOrder("none")}
-                  className="flex h-11 w-full items-center justify-center rounded-lg bg-primary font-medium text-primary-foreground text-sm disabled:opacity-50"
-                >
-                  {submittingMode === "save" ? (
-                    <Loader2Icon className="size-4 animate-spin" />
-                  ) : (
-                    "Save"
-                  )}
-                </button>
+          {/* Footer: total + payment + actions */}
+          <footer className="shrink-0 border-t-2 border-zinc-300 bg-zinc-100">
+            {/* Total row */}
+            <div className="flex items-center justify-between gap-3 border-b border-zinc-300 bg-white px-2.5 py-1.5">
+              <div className="flex flex-wrap gap-2">
                 {!printerReady ? (
                   <button
                     type="button"
                     onClick={() => setPrinterDialogOpen(true)}
-                    className="text-left text-primary text-xs underline-offset-2 hover:underline"
+                    className="flex items-center gap-1 rounded border border-zinc-300 bg-white px-2 py-1 text-[11px] text-zinc-600 hover:bg-zinc-50"
                   >
-                    {printerSaved
-                      ? "Printer disconnected — reconnect USB/power to enable printing."
-                      : "No printer connected — plug in a printer to enable printing."}
+                    <PrinterIcon className="size-3" />
+                    {printerSaved ? "Reconnect printer" : "Setup printer"}
                   </button>
                 ) : null}
-                <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-3">
-                  <button
-                    type="button"
-                    disabled={isSubmitting || cart.length === 0}
-                    onClick={() => void submitPosOrder("kot")}
-                    className="flex h-10 min-w-0 items-center justify-center rounded-md border px-2 text-sm disabled:opacity-50"
-                  >
-                    {submittingMode === "kot" ? (
-                      <Loader2Icon className="size-4 animate-spin" />
-                    ) : (
-                      "Save & KOT"
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isSubmitting || cart.length === 0}
-                    onClick={() => void submitPosOrder("bill")}
-                    className="flex h-10 min-w-0 items-center justify-center rounded-md border px-2 text-sm disabled:opacity-50"
-                  >
-                    {submittingMode === "bill" ? (
-                      <Loader2Icon className="size-4 animate-spin" />
-                    ) : (
-                      "Save & Bill"
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isSubmitting || cart.length === 0}
-                    onClick={() => void submitPosOrder("both")}
-                    className="flex h-10 min-w-0 items-center justify-center rounded-md border px-2 text-sm disabled:opacity-50"
-                  >
-                    {submittingMode === "both" ? (
-                      <Loader2Icon className="size-4 animate-spin" />
-                    ) : (
-                      "Save & Print"
-                    )}
-                  </button>
-                </div>
               </div>
+              <p className="text-right">
+                <span className="text-xs font-medium text-zinc-600">Total </span>
+                <span className="text-xl font-bold tabular-nums text-zinc-900">
+                  {money(totals.total)}
+                </span>
+              </p>
+            </div>
 
-              <div className="min-h-12 space-y-1">
+            {/* Payment row */}
+            <div className="flex flex-wrap items-center gap-1.5 border-b border-zinc-300 px-2.5 py-1.5">
+              <button
+                type="button"
+                onClick={() => setPaymentStatus("unpaid")}
+                className={`inline-flex h-7 items-center gap-1 rounded px-2 text-xs font-semibold transition-colors ${
+                  paymentStatus === "unpaid"
+                    ? "bg-emerald-500 text-white shadow-sm"
+                    : "border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50"
+                }`}
+              >
+                <CheckCircle2Icon className="size-3.5" />
+                {billPrintLayout.unpaidLabel || "Not Paid"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setPaymentStatus("paid")}
+                className={`inline-flex h-7 items-center gap-1 rounded px-2 text-xs font-semibold transition-colors ${
+                  paymentStatus === "paid"
+                    ? "bg-emerald-600 text-white shadow-sm"
+                    : "border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50"
+                }`}
+              >
+                <CheckCircle2Icon className="size-3.5" />
+                Paid
+              </button>
+              {paymentStatus === "paid" ? (
+                (posSettings?.paymentMethods ?? []).length === 0 ? (
+                  <span className="text-[11px] text-zinc-500">Add payment methods in Settings</span>
+                ) : (
+                  (posSettings?.paymentMethods ?? []).map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => setPaymentMethodKey(p.id)}
+                      className={`inline-flex h-7 items-center gap-1 rounded border px-2 text-xs font-medium transition-colors ${
+                        paymentMethodKey === p.id
+                          ? "border-red-400 bg-white text-red-700 shadow-sm ring-1 ring-red-200"
+                          : "border-zinc-300 bg-white text-zinc-800 hover:bg-zinc-50"
+                      }`}
+                    >
+                      <BanknoteIcon className="size-3 opacity-70" />
+                      {p.name}
+                    </button>
+                  ))
+                )
+              ) : null}
+            </div>
+
+            {/* Action buttons row */}
+            <div className="grid grid-cols-2 gap-1.5 p-2 sm:grid-cols-4">
+              <button
+                type="button"
+                disabled={isSubmitting || cart.length === 0}
+                onClick={() => void submitPosOrder("none")}
+                className="flex h-9 items-center justify-center rounded bg-red-600 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                {submittingMode === "save" ? (
+                  <Loader2Icon className="size-3.5 animate-spin" />
+                ) : (
+                  "Save"
+                )}
+              </button>
+              <button
+                type="button"
+                disabled={isSubmitting || cart.length === 0}
+                onClick={() => void submitPosOrder("kot")}
+                className="flex h-9 items-center justify-center rounded bg-red-600 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                {submittingMode === "kot" ? (
+                  <Loader2Icon className="size-3.5 animate-spin" />
+                ) : (
+                  "Save & KOT"
+                )}
+              </button>
+              <button
+                type="button"
+                disabled={isSubmitting || cart.length === 0}
+                onClick={() => void submitPosOrder("bill")}
+                className="flex h-9 items-center justify-center rounded bg-red-600 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                {submittingMode === "bill" ? (
+                  <Loader2Icon className="size-3.5 animate-spin" />
+                ) : (
+                  "Save & Bill"
+                )}
+              </button>
+              <button
+                type="button"
+                disabled={isSubmitting || cart.length === 0}
+                onClick={() => void submitPosOrder("both")}
+                className="flex h-9 items-center justify-center rounded bg-red-600 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                {submittingMode === "both" ? (
+                  <Loader2Icon className="size-3.5 animate-spin" />
+                ) : (
+                  "Save & Print"
+                )}
+              </button>
+            </div>
+
+            {(notice || error) ? (
+              <div className="space-y-1 border-t border-zinc-300 bg-white px-3 py-2">
                 {notice ? (
-                  <p className="break-words text-sm text-green-700 dark:text-green-400">{notice}</p>
+                  <p className="break-words text-sm text-emerald-700">{notice}</p>
                 ) : null}
                 {error ? (
-                  <p className="break-words text-destructive text-sm">{error}</p>
+                  <p className="break-words text-sm text-red-600">{error}</p>
                 ) : null}
               </div>
-            </div>
+            ) : null}
           </footer>
         </aside>
       </div>

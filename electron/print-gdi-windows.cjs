@@ -103,7 +103,7 @@ async function printReceiptGdiWindows(deviceName, plainText, title) {
                   color: false,
                   deviceName: name,
                   margins: { marginType: "custom", top: 0, bottom: 0, left: 0, right: 0 },
-                  pageSize: { width: 72000, height: 200000 },
+                  pageSize: { width: 80000, height: 200000 },
                 },
                 finish,
               );

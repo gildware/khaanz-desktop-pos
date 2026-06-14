@@ -48,8 +48,8 @@ async function printReceiptPdfWindows(deviceName, plainText, title) {
   const pdfPath = path.join(printDir, `r-${stamp}.pdf`);
   fs.writeFileSync(htmlPath, doc, "utf8");
 
-  // 80mm roll. Content CSS is constrained to ~72mm; keep the page at 80mm and let
-  // SumatraPDF "fit" map it onto the printer's printable width.
+  // 80mm roll — content and page share the same width so SumatraPDF does not
+  // shrink the receipt and leave empty margins on the right.
   const pageWidthMm = 80;
   const pageWidthMicrons = Math.round((pageWidthMm / MM_PER_INCH) * MICRONS_PER_INCH);
 

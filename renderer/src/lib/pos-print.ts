@@ -179,19 +179,19 @@ function buildThermalStyle(layout?: BillPrintLayout): string {
   const align = layout?.headerAlign ?? "center";
   const r = ".thermal-receipt-root";
   return `
-  @page { size: 80mm auto; margin: 3mm; }
+  @page { size: 80mm auto; margin: 0; }
   html { color-scheme: light only; }
-  body.thermal-print-body { margin: 0; padding: 0; background: #fff; display: flex; justify-content: center; }
+  body.thermal-print-body { margin: 0; padding: 0; background: #fff; }
   ${r} {
     box-sizing: border-box;
     font-family: ${family};
     font-size: ${bodySize}px;
     font-weight: ${weight};
     line-height: ${lineHeight};
-    margin: 0 auto;
-    padding: ${pad}px;
+    margin: 0;
+    padding: 0 2px ${pad}px;
     width: 100%;
-    max-width: 72mm;
+    max-width: 80mm;
     background: #fff;
     color: #000;
     -webkit-print-color-adjust: exact;
@@ -229,13 +229,25 @@ function buildThermalStyle(layout?: BillPrintLayout): string {
   ${r} .meta-row .fulfill { font-weight: ${weightNum + 100}; font-size: 12px; }
   ${r} .time-line { font-size: 11px; margin: 0 0 4px; }
   ${r} .pre { white-space: pre-wrap; font-size: 11px; margin: 4px 0; text-align: ${align}; }
+  ${r} .footer-note { white-space: pre-wrap; font-size: 11px; margin: 4px 0; text-align: center; }
   ${r} .muted { font-size: 11px; margin: 3px 0; }
   ${r} table { width: 100%; border-collapse: collapse; margin: 6px 0; }
+  ${r} table.item-table { table-layout: fixed; }
+  ${r} table.item-table .col-item { width: 46%; }
+  ${r} table.item-table .col-qty { width: 14%; }
+  ${r} table.item-table .col-price { width: 20%; }
+  ${r} table.item-table .col-amt { width: 20%; }
+  ${r} table.item-table td:first-child,
+  ${r} table.item-table th:first-child { word-break: break-word; overflow-wrap: anywhere; }
+  ${r} table.kot-table { table-layout: fixed; }
+  ${r} table.kot-table .col-item { width: 78%; }
+  ${r} table.kot-table .col-qty { width: 22%; }
   ${r} th, ${r} td { padding: 2px 0; text-align: left; vertical-align: top; font-size: 11px; }
   ${r} th { border-bottom: 1px solid #000; font-weight: ${weightNum}; }
   ${r} .right { text-align: right; white-space: nowrap; }
   ${r} .totals-row { display: flex; justify-content: space-between; font-size: 11px; margin: 4px 0; }
-  ${r} .grand-total { display: flex; justify-content: space-between; align-items: baseline; font-size: ${grandSize}px; font-weight: ${weightNum + 100}; margin: 8px 0 4px; }
+  ${r} .grand-total { display: flex; justify-content: space-between; align-items: baseline; font-size: ${grandSize}px; font-weight: ${weightNum + 100}; margin: 8px 0 4px; white-space: nowrap; }
+  ${r} .grand-total span { white-space: nowrap; }
   ${r} .payment-status { font-size: 11px; margin: 4px 0; }
   ${r} tr.addon-line td { font-size: 10px; line-height: 1.3; }
   ${r} tr.addon-line .iname { padding-left: 8px; }
@@ -364,8 +376,33 @@ function splitLines(text: string): string[] {
   return text.replace(/\r\n/g, "\n").split("\n").filter((l) => l.length > 0);
 }
 
-/** 80mm thermal — ~42 chars (BillQuick Lite / POS 203DPI on Windows). */
-const PLAIN_WIDTH = 42;
+/** 80mm thermal — 48 chars (Font A / 12 CPI on standard 80mm roll). */
+const PLAIN_WIDTH = 48;
+const PLAIN_QTY_COL_W = 4;
+const PLAIN_PRICE_COL_W = 8;
+const PLAIN_AMT_COL_W = 8;
+const PLAIN_KOT_QTY_COL_W = 6;
+
+function padPlainField(text: string, width: number): string {
+  const t = text.trim();
+  return t.length >= width ? t.slice(0, width) : t.padStart(width);
+}
+
+function formatPlainReceiptNumHeader(): string {
+  return `${padPlainField("Qty", PLAIN_QTY_COL_W)} ${padPlainField("Price", PLAIN_PRICE_COL_W)} ${padPlainField("Amt", PLAIN_AMT_COL_W)}`;
+}
+
+function formatPlainReceiptNums(qty: number, unit: number, subtotal: number): string {
+  return `${padPlainField(String(qty), PLAIN_QTY_COL_W)} ${padPlainField(unit.toFixed(2), PLAIN_PRICE_COL_W)} ${padPlainField(subtotal.toFixed(2), PLAIN_AMT_COL_W)}`;
+}
+
+function formatBillAmountPlain(amount: number): string {
+  return `Rs.${amount.toFixed(2)}`;
+}
+
+function formatBillAmountHtml(amount: number): string {
+  return `Rs.${amount.toFixed(2)}`;
+}
 
 function centerPlain(text: string, width = PLAIN_WIDTH): string {
   const t = text.trim();
@@ -407,7 +444,7 @@ export function wrapPlainTextPrintDocument(text: string, title: string): string 
   const body = escapeHtml(text);
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><meta name="color-scheme" content="light only"/><title>${safeTitle}</title><style>
   html, body { margin: 0; padding: 2mm; background: #fff !important; color: #000 !important; color-scheme: light only; }
-  pre { margin: 0; font-family: "Courier New", Courier, monospace; font-size: 12px; font-weight: 700; line-height: 1.35; white-space: pre-wrap; word-break: break-word; }
+  pre { margin: 0; font-family: "Courier New", Courier, monospace; font-size: 12px; font-weight: 700; line-height: 1.35; white-space: pre; overflow-wrap: normal; word-break: normal; }
 </style></head><body><pre>${body}</pre></body></html>`;
 }
 
@@ -473,20 +510,13 @@ export function buildBillPlainText(o: PosBillPrintOptions): string {
   if (o.proforma) lines.push("PROFORMA".slice(0, PLAIN_WIDTH));
   lines.push(rule());
 
-  lines.push(padPlain("Item", "Qty. Price Amt"));
+  lines.push(padPlain("Item", formatPlainReceiptNumHeader()));
   for (const r of o.lines) {
     lines.push(r.label.slice(0, PLAIN_WIDTH));
-    lines.push(
-      padPlain(
-        "",
-        `${r.qty}  ${r.unit.toFixed(2)}  ${r.subtotal.toFixed(2)}`,
-      ),
-    );
+    lines.push(padPlain("", formatPlainReceiptNums(r.qty, r.unit, r.subtotal)));
     for (const a of r.addonRows ?? []) {
       lines.push(`+ ${a.name}`.slice(0, PLAIN_WIDTH));
-      lines.push(
-        padPlain("", `${a.qty}  ${a.unit.toFixed(2)}  ${a.subtotal.toFixed(2)}`),
-      );
+      lines.push(padPlain("", formatPlainReceiptNums(a.qty, a.unit, a.subtotal)));
     }
   }
   lines.push(rule());
@@ -501,13 +531,15 @@ export function buildBillPlainText(o: PosBillPrintOptions): string {
     lines.push(padPlain("Discount", `-${o.discount.toFixed(2)}`));
   }
   lines.push(rule());
-  lines.push(padPlain("Grand Total", `₹${o.total.toFixed(2)}`));
+  lines.push(padPlain("Grand Total", formatBillAmountPlain(o.total)));
   const payStatus = o.paymentLabel?.trim()
     ? o.paymentLabel.trim()
     : (layout?.unpaidLabel ?? "Not Paid");
   lines.push(payStatus.slice(0, PLAIN_WIDTH));
   if (layout?.showFooterNotes !== false) {
-    for (const f of splitLines(layout?.footerNotes ?? "")) lines.push(f.slice(0, PLAIN_WIDTH));
+    for (const f of splitLines(layout?.footerNotes ?? "")) {
+      lines.push(centerPlain(f).slice(0, PLAIN_WIDTH));
+    }
   }
   if (o.notes.trim()) lines.push(`Note: ${o.notes.trim()}`.slice(0, PLAIN_WIDTH));
   lines.push("");
@@ -526,11 +558,11 @@ export function buildKotPlainText(o: PosKotPrintOptions): string {
   lines.push(formatBillDateTime(new Date()).slice(0, PLAIN_WIDTH));
   if (o.notes.trim()) lines.push(`Note: ${o.notes.trim()}`.slice(0, PLAIN_WIDTH));
   lines.push(plainRule());
-  lines.push(padPlain("Item", "Qty"));
+  lines.push(padPlain("Item", padPlainField("Qty", PLAIN_KOT_QTY_COL_W)));
   for (const r of o.lines) {
-    lines.push(padPlain(r.label, String(r.qty)));
+    lines.push(padPlain(r.label, padPlainField(String(r.qty), PLAIN_KOT_QTY_COL_W)));
     for (const a of r.addonRows ?? []) {
-      lines.push(padPlain(`+ ${a.name}`, String(a.qty)));
+      lines.push(padPlain(`+ ${a.name}`, padPlainField(String(a.qty), PLAIN_KOT_QTY_COL_W)));
     }
   }
   lines.push("");
@@ -572,7 +604,7 @@ export function buildBillHtmlBody(o: PosBillPrintOptions): string {
   const customFooterHtml =
     layout?.showFooterNotes !== false
       ? splitLines(layout?.footerNotes ?? "")
-          .map((l) => `<div class="pre">${escapeHtml(l)}</div>`)
+          .map((l) => `<div class="footer-note">${escapeHtml(l)}</div>`)
           .join("")
       : "";
 
@@ -640,7 +672,13 @@ ${metaOrderHtml}
 <div class="time-line">${escapeHtml(formatBillDateTime(now))}</div>
 ${proformaLine}
 <hr class="${rule}"/>
-<table>
+<table class="item-table">
+<colgroup>
+<col class="col-item" />
+<col class="col-qty" />
+<col class="col-price" />
+<col class="col-amt" />
+</colgroup>
 <thead><tr><th>Item</th><th class="right">Qty.</th><th class="right">Price</th><th class="right">Amount</th></tr></thead>
 <tbody>${rows}</tbody>
 </table>
@@ -648,7 +686,7 @@ ${proformaLine}
 <div class="totals-row"><span>Total Qty: ${totalQty}</span><span>Sub Total ${itemsSub.toFixed(2)}</span></div>
 ${extraTotals.join("")}
 <hr class="${rule}"/>
-<div class="grand-total"><span>Grand Total</span><span>₹${o.total.toFixed(2)}</span></div>
+<div class="grand-total"><span>Grand Total</span><span>${formatBillAmountHtml(o.total)}</span></div>
 <div class="payment-status">${escapeHtml(payStatus)}</div>
 ${customFooterHtml}
 ${o.notes.trim() ? `<div class="muted">Note: ${escapeHtml(o.notes.trim())}</div>` : ""}
@@ -683,7 +721,11 @@ ${headerHtml}
 ${o.dineInTable?.trim() ? `<div class="muted">Table: ${escapeHtml(o.dineInTable.trim())}</div>` : ""}
 <div class="muted">${escapeHtml(formatBillDateTime(new Date()))}</div>
 ${o.notes.trim() ? `<div class="muted">Note: ${escapeHtml(o.notes.trim())}</div>` : ""}
-<table>
+<table class="kot-table">
+<colgroup>
+<col class="col-item" />
+<col class="col-qty" />
+</colgroup>
 <thead><tr><th>Item</th><th class="right">Qty</th></tr></thead>
 <tbody>${rows}</tbody>
 </table>

@@ -31,7 +31,7 @@ async function printGdiDotNetWindows(resolvedName, text) {
     "  $y = 12",
     "  foreach ($line in $lines) {",
     "    if ($line.Length -gt 0) {",
-    "      $e.Graphics.DrawString($line, $font, $brush, 8, $y)",
+    "      $e.Graphics.DrawString($line, $font, $brush, 2, $y)",
     "    }",
     "    $y += 16",
     "  }",

@@ -1,7 +1,7 @@
 /** Shared thermal receipt HTML wrapper (main process print window). */
 
 const THERMAL_PRINT_STYLE = `
-  @page { size: 80mm auto; margin: 3mm; }
+  @page { size: 80mm auto; margin: 0; }
   html {
     color-scheme: light only;
     background: #fff !important;
@@ -19,11 +19,22 @@ const THERMAL_PRINT_STYLE = `
     font-weight: 700;
     line-height: 1.45;
     margin: 0;
-    padding: 8px;
-    width: 72mm;
-    max-width: 72mm;
+    padding: 0 2px;
+    width: 80mm;
+    max-width: 80mm;
     background: #fff !important;
     color: #000 !important;
+  }
+  pre {
+    margin: 0;
+    width: 100%;
+    font-family: "Courier New", Courier, monospace;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.35;
+    white-space: pre;
+    overflow-wrap: normal;
+    word-break: normal;
   }
   h1 {
     font-size: 16px;
@@ -96,7 +107,7 @@ function wrapThermalPrintDocument(bodyHtml, title) {
 
 /** Sample receipt for Connect printer → Test print. */
 function buildTestPrintPlainText() {
-  const w = 42;
+  const w = 48;
   const line = "-".repeat(w);
   const center = (s) => {
     const t = String(s).trim();

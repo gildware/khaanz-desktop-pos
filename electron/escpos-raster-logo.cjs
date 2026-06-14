@@ -3,8 +3,8 @@ const { toAsciiSafe } = require("./escpos-buffer.cjs");
 
 /** ~203 DPI thermal — 8 dots per mm on 80mm paper. */
 const DOTS_PER_MM = 8;
-/** Match Settings preview / CSS max-width (72mm printable on 80mm roll). */
-const PRINTABLE_WIDTH_DOTS = Math.round(72 * DOTS_PER_MM);
+/** Match receipt CSS width (80mm roll, full printable area). */
+const PRINTABLE_WIDTH_DOTS = Math.round(80 * DOTS_PER_MM);
 
 function centerRasterHorizontally(raster, imageWidth, imageHeight, bytesPerRow) {
   if (imageWidth >= PRINTABLE_WIDTH_DOTS) {
