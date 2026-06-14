@@ -32,6 +32,7 @@ type Props = {
   open: boolean;
   onClose: () => void;
   onSaved: () => void;
+  onTestPrintOk?: (status?: PrinterStatus) => void;
 };
 
 function pickDefaultFromList(printers: PrinterRow[]): string {
@@ -64,7 +65,7 @@ function liveStatusLine(status: PrinterStatus | null): { text: string; className
   };
 }
 
-export function PrinterDialog({ open, onClose, onSaved }: Props) {
+export function PrinterDialog({ open, onClose, onSaved, onTestPrintOk }: Props) {
   const desktop = window.khaanzDesktop;
   const [printers, setPrinters] = useState<PrinterRow[]>([]);
   const [deviceName, setDeviceName] = useState("");
@@ -164,6 +165,12 @@ export function PrinterDialog({ open, onClose, onSaved }: Props) {
           ? `Printed via ${out.method}. Check your printer now.`
           : "Test print sent. Check your printer now.",
       );
+      const printStatus =
+        "status" in out && out.status && typeof out.status === "object"
+          ? (out.status as PrinterStatus)
+          : undefined;
+      if (printStatus) setStatus(printStatus);
+      onTestPrintOk?.(printStatus);
       await refresh();
       onSaved();
     } catch (e) {

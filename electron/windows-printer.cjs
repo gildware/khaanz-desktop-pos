@@ -103,6 +103,7 @@ async function checkWindowsPrinterOnline(printerName) {
     "if ($port -match 'PORTPROMPT|PDF|OneNote|Fax|XPS|File:') { Write-Output 'virtual'; exit 5 }",
     "if ($p.WorkOffline) { Write-Output 'work-offline-soft'; exit 0 }",
     "$st = [string]$p.PrinterStatus",
+    "if ($st -match 'PendingDeletion|Deleting|Deleted') { Write-Output 'unhealthy'; exit 4 }",
     "if ($st -eq 'Offline' -or $st -eq 'Error' -or $st -eq 'NotAvailable') { Write-Output 'status-soft'; exit 0 }",
     "Write-Output 'ok'",
     "exit 0",
@@ -136,6 +137,15 @@ async function checkWindowsPrinterOnline(printerName) {
       online: true,
       name: resolved.name,
       detail: "Windows reports the printer idle/offline — printing still works.",
+    };
+  }
+  if (out === "unhealthy") {
+    return {
+      ok: true,
+      online: false,
+      name: resolved.name,
+      detail:
+        "That printer queue was removed or is being deleted in Windows. Open Printer, Refresh, and pick the working queue (e.g. POS-80).",
     };
   }
   // Genuine failure: Get-Printer threw (queue removed/renamed) or PowerShell errored.
@@ -466,10 +476,7 @@ async function printPlainTextWindows(deviceName, text, title, options = {}) {
         printer: name,
         error: detail,
       });
-      return {
-        ok: false,
-        error: `Logo print failed (${detail}). Try Test print, then Save & Bill again.`,
-      };
+      // Fall through to GDI/text methods — logo raster is not supported on every queue.
     } catch (e) {
       const detail = String(e && e.message ? e.message : e);
       appendPrintLog({
@@ -479,10 +486,7 @@ async function printPlainTextWindows(deviceName, text, title, options = {}) {
         printer: name,
         error: detail,
       });
-      return {
-        ok: false,
-        error: `Logo print failed (${detail}). Try Test print, then Save & Bill again.`,
-      };
+      // Fall through to GDI/text methods.
     }
   }
 

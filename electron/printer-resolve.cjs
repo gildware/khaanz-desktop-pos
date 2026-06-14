@@ -31,26 +31,43 @@ function isLikelyReceiptPrinterName(name) {
   );
 }
 
+/** Chromium/Electron queue status — 0 idle, 1 processing; 2+ often stopped/error. */
+function isUnhealthyElectronPrinter(printer) {
+  const st = printer?.status;
+  return typeof st === "number" && st >= 2;
+}
+
+function scorePhysicalPrinter(printer) {
+  let score = 0;
+  if (printer?.isDefault) score += 100;
+  if (!isUnhealthyElectronPrinter(printer)) score += 40;
+  if (isLikelyReceiptPrinterName(printer?.name)) score += 20;
+  return score;
+}
+
 /** Prefer saved → physical default → receipt-like → any physical → virtual default → first. */
 function pickBestPrinter(printers, preferredName) {
   const list = Array.isArray(printers) ? printers : [];
   if (!list.length) return "";
 
   const preferred = String(preferredName || "").trim();
-  if (preferred && list.some((p) => p.name === preferred)) return preferred;
+  if (preferred) {
+    const hit = list.find((p) => p.name === preferred);
+    if (hit && !isVirtualPrinterName(hit.name) && !isUnhealthyElectronPrinter(hit)) {
+      return hit.name;
+    }
+  }
 
   const defPhysical = list.find((p) => p.isDefault && !isVirtualPrinterName(p.name));
   if (defPhysical?.name) return defPhysical.name;
 
-  // Prefer a real receipt/physical queue over a virtual default (PDF/XPS/Fax),
-  // which is often the Windows default on shop PCs.
-  const receipt = list.find(
-    (p) => !isVirtualPrinterName(p.name) && isLikelyReceiptPrinterName(p.name),
-  );
-  if (receipt?.name) return receipt.name;
-
-  const physical = list.find((p) => !isVirtualPrinterName(p.name));
-  if (physical?.name) return physical.name;
+  const physical = list.filter((p) => !isVirtualPrinterName(p.name));
+  if (physical.length) {
+    const ranked = [...physical].sort(
+      (a, b) => scorePhysicalPrinter(b) - scorePhysicalPrinter(a),
+    );
+    if (ranked[0]?.name) return ranked[0].name;
+  }
 
   const defAny = list.find((p) => p.isDefault);
   if (defAny?.name) return defAny.name;
@@ -63,5 +80,6 @@ module.exports = {
   printerNamesLooselyMatch,
   isVirtualPrinterName,
   isLikelyReceiptPrinterName,
+  isUnhealthyElectronPrinter,
   pickBestPrinter,
 };

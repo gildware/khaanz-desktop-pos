@@ -294,6 +294,20 @@ export function App() {
     [billPreviewSettings, posSettings, boot?.apiOrigin],
   );
 
+  const applyPrinterStatus = useCallback((status: {
+    saved?: boolean;
+    connected?: boolean;
+    ready?: boolean;
+    statusDetail?: string;
+  }) => {
+    if (status.saved !== undefined) setPrinterSaved(Boolean(status.saved));
+    if (status.connected !== undefined) setPrinterConnected(Boolean(status.connected));
+    if (status.ready !== undefined || status.connected !== undefined) {
+      setPrinterReady(Boolean(status.ready ?? status.connected));
+    }
+    if (status.statusDetail !== undefined) setPrinterStatusDetail(status.statusDetail);
+  }, []);
+
   const refreshPrinterStatus = useCallback(async () => {
     if (!desktop?.getPrinterStatus) {
       setPrinterSaved(false);
@@ -305,20 +319,17 @@ export function App() {
     try {
       const status = await withIpcTimeout(
         desktop.getPrinterStatus({ includeDiagnostics: false }),
-        20_000,
+        12_000,
         "Printer status",
       );
       if (status.ok) {
-        setPrinterSaved(Boolean(status.saved));
-        setPrinterConnected(Boolean(status.connected));
-        setPrinterReady(Boolean(status.ready ?? status.connected));
-        setPrinterStatusDetail(status.statusDetail ?? "");
+        applyPrinterStatus(status);
       }
       /* Keep last known printer state on failed IPC — avoids disabling Save & Print after a slow status poll. */
     } catch {
       /* timeout or IPC error — keep last known state */
     }
-  }, [desktop]);
+  }, [desktop, applyPrinterStatus]);
 
   const refreshConnectivity = useCallback(async () => {
     if (!desktop?.checkConnectivity) {
@@ -929,6 +940,10 @@ export function App() {
           }
           clearOrderForm();
           setNotice(`Order ${orderRef} saved and sent to printer`);
+          setPrinterConnected(true);
+          setPrinterReady(true);
+          setPrinterSaved(true);
+          void refreshPrinterStatus();
         } catch (printErr) {
           clearOrderForm();
           const msg = printErr instanceof Error ? printErr.message : String(printErr);
@@ -1840,6 +1855,15 @@ export function App() {
           void refreshPrinterStatus();
         }}
         onSaved={() => void refreshPrinterStatus()}
+        onTestPrintOk={(status) => {
+          if (status) applyPrinterStatus(status);
+          else {
+            setPrinterConnected(true);
+            setPrinterReady(true);
+            setPrinterSaved(true);
+          }
+          void refreshPrinterStatus();
+        }}
       />
 
       <OpenItemDialog

@@ -336,7 +336,21 @@ export type KhaanzDesktopApi = {
     printers: Array<{ name: string; isDefault?: boolean; status?: string }>;
     error?: string;
   }>;
-  testPrint: (deviceName?: string) => Promise<{ ok: true; method?: string } | { ok: false; error: string }>;
+  testPrint: (
+    deviceName?: string,
+  ) => Promise<
+    | {
+        ok: true;
+        method?: string;
+        status?: {
+          saved: boolean;
+          connected: boolean;
+          ready?: boolean;
+          statusDetail?: string;
+        };
+      }
+    | { ok: false; error: string }
+  >;
   listRecentPosOrders: () => Promise<
     { ok: true; orders: RecentOrderRow[] } | { ok: false; error: string }
   >;
