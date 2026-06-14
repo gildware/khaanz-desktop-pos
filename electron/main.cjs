@@ -1354,16 +1354,23 @@ async function getPrinterConnectionStatus(opts = {}) {
     }
   }
 
+  // A real (non-virtual) queue that is present in the OS list is treated as
+  // connected even when the online probe is uncertain (e.g. PowerShell timeout
+  // or a flaky WorkOffline flag). This keeps the header/print buttons in sync
+  // with what Test print actually proves, instead of false "No printer" states.
+  const physicalInList = Boolean(deviceName && inList && !isVirtualPrinterName(deviceName));
+  const connected = Boolean(deviceName && (online || verified || physicalInList));
+
   let statusDetail = "";
   if (!list.length) {
     statusDetail = "No printers found — connect USB and install the driver.";
   } else if (!deviceName) {
     statusDetail = "No printer available.";
-  } else if (!online) {
+  } else if (!connected) {
     statusDetail = "Printer disconnected or offline.";
   } else if (active.autoSelected) {
     statusDetail = `Using ${deviceName} (auto-detected).`;
-  } else if (online && !verified) {
+  } else if (!verified) {
     statusDetail = "Connected — run Test print to confirm paper output.";
   }
 
@@ -1372,8 +1379,8 @@ async function getPrinterConnectionStatus(opts = {}) {
     available: inList,
     online,
     verified,
-    connected: Boolean(deviceName && (online || (verified && inList))),
-    ready: Boolean(deviceName && (online || (verified && inList))),
+    connected,
+    ready: connected,
     autoSelected: active.autoSelected,
     deviceName,
     statusDetail,

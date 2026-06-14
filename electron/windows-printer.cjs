@@ -91,15 +91,19 @@ async function checkWindowsPrinterOnline(printerName) {
     return { ok: true, online: false, detail: resolved.detail };
   }
 
+  // Only a virtual/file queue or a missing queue is a hard block. USB thermal
+  // receipt printers routinely report WorkOffline=true or PrinterStatus=Offline
+  // when idle yet still accept raw spool jobs, so those are treated as soft
+  // warnings (online=true) to match what Test print actually proves.
   const script = [
     "$ErrorActionPreference = 'Stop'",
     `$name = ${psQuote(resolved.name)}`,
     "$p = Get-Printer -Name $name -ErrorAction Stop",
-    "if ($p.WorkOffline) { Write-Output 'work-offline'; exit 3 }",
     "$port = [string]$p.PortName",
     "if ($port -match 'PORTPROMPT|PDF|OneNote|Fax|XPS|File:') { Write-Output 'virtual'; exit 5 }",
+    "if ($p.WorkOffline) { Write-Output 'work-offline-soft'; exit 0 }",
     "$st = [string]$p.PrinterStatus",
-    "if ($st -eq 'Offline' -or $st -eq 'Error' -or $st -eq 'NotAvailable') { Write-Output $st; exit 4 }",
+    "if ($st -eq 'Offline' -or $st -eq 'Error' -or $st -eq 'NotAvailable') { Write-Output 'status-soft'; exit 0 }",
     "Write-Output 'ok'",
     "exit 0",
   ].join("\n");
@@ -117,14 +121,24 @@ async function checkWindowsPrinterOnline(printerName) {
       detail: "That queue is not a physical receipt printer (PDF/Fax/virtual).",
     };
   }
-  if (out === "work-offline" || out.includes("offline")) {
+  if (out === "work-offline-soft") {
     return {
       ok: true,
-      online: false,
+      online: true,
       name: resolved.name,
-      detail: "Printer is offline in Windows",
+      detail:
+        "Windows shows this printer as 'Use Printer Offline' — printing still works; untick it in Windows if jobs stall.",
     };
   }
+  if (out === "status-soft") {
+    return {
+      ok: true,
+      online: true,
+      name: resolved.name,
+      detail: "Windows reports the printer idle/offline — printing still works.",
+    };
+  }
+  // Genuine failure: Get-Printer threw (queue removed/renamed) or PowerShell errored.
   return {
     ok: true,
     online: false,

@@ -803,15 +803,6 @@ export function App() {
         setError("Add at least one item.");
         return;
       }
-      if (printMode !== "none" && !printerReady) {
-        setError(
-          printerSaved
-            ? "Printer is disconnected. Reconnect USB/power, then wait for Printer connected in the header."
-            : "No printer connected. Plug in a printer and wait for Printer connected in the header.",
-        );
-        setPrinterDialogOpen(true);
-        return;
-      }
       if (fulfillment === "delivery" && !address.trim()) {
         setError("Address is required for delivery.");
         setCustomerDetailsOpen(true);
@@ -1791,7 +1782,7 @@ export function App() {
                 <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-3">
                   <button
                     type="button"
-                    disabled={isSubmitting || cart.length === 0 || !printerReady}
+                    disabled={isSubmitting || cart.length === 0}
                     onClick={() => void submitPosOrder("kot")}
                     className="flex h-10 min-w-0 items-center justify-center rounded-md border px-2 text-sm disabled:opacity-50"
                   >
@@ -1803,7 +1794,7 @@ export function App() {
                   </button>
                   <button
                     type="button"
-                    disabled={isSubmitting || cart.length === 0 || !printerReady}
+                    disabled={isSubmitting || cart.length === 0}
                     onClick={() => void submitPosOrder("bill")}
                     className="flex h-10 min-w-0 items-center justify-center rounded-md border px-2 text-sm disabled:opacity-50"
                   >
@@ -1815,7 +1806,7 @@ export function App() {
                   </button>
                   <button
                     type="button"
-                    disabled={isSubmitting || cart.length === 0 || !printerReady}
+                    disabled={isSubmitting || cart.length === 0}
                     onClick={() => void submitPosOrder("both")}
                     className="flex h-10 min-w-0 items-center justify-center rounded-md border px-2 text-sm disabled:opacity-50"
                   >

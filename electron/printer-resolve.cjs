@@ -31,7 +31,7 @@ function isLikelyReceiptPrinterName(name) {
   );
 }
 
-/** Prefer saved → default → receipt-like → any physical → first in list. */
+/** Prefer saved → physical default → receipt-like → any physical → virtual default → first. */
 function pickBestPrinter(printers, preferredName) {
   const list = Array.isArray(printers) ? printers : [];
   if (!list.length) return "";
@@ -42,9 +42,8 @@ function pickBestPrinter(printers, preferredName) {
   const defPhysical = list.find((p) => p.isDefault && !isVirtualPrinterName(p.name));
   if (defPhysical?.name) return defPhysical.name;
 
-  const defAny = list.find((p) => p.isDefault);
-  if (defAny?.name) return defAny.name;
-
+  // Prefer a real receipt/physical queue over a virtual default (PDF/XPS/Fax),
+  // which is often the Windows default on shop PCs.
   const receipt = list.find(
     (p) => !isVirtualPrinterName(p.name) && isLikelyReceiptPrinterName(p.name),
   );
@@ -52,6 +51,9 @@ function pickBestPrinter(printers, preferredName) {
 
   const physical = list.find((p) => !isVirtualPrinterName(p.name));
   if (physical?.name) return physical.name;
+
+  const defAny = list.find((p) => p.isDefault);
+  if (defAny?.name) return defAny.name;
 
   return list[0]?.name?.trim() || "";
 }

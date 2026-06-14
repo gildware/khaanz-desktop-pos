@@ -517,10 +517,6 @@ export function RecentOrdersPanel({
           coordinates in server settings.
         </p>
       ) : null}
-      {!printerConnected ? (
-        <p className="text-muted-foreground text-sm">Connect printer to enable printing.</p>
-      ) : null}
-
       <div className="min-h-0 flex-1 overflow-y-auto">
         {orders.length === 0 ? (
           <div className="rounded-2xl border border-dashed bg-muted/20 px-4 py-12 text-center text-muted-foreground text-sm">
@@ -546,8 +542,7 @@ export function RecentOrdersPanel({
               const lines = o.lines ?? [];
               const canPrintWhole = orderLinePayloadsToReceiptLines(lines).length > 0;
               const printOnCooldown = isOrderPrintOnCooldown(o.id);
-              const printButtonsDisabled =
-                !canPrintWhole || !printerConnected || printOnCooldown;
+              const printButtonsDisabled = !canPrintWhole || printOnCooldown;
               const badgeLabel = displayStatusLabel(o, orderView);
               const canSendWhatsApp =
                 orderView === "online" &&
