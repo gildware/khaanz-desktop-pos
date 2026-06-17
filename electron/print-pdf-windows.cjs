@@ -20,11 +20,14 @@ const CSS_DPI = 96;
  *  - the PDF page height MUST match the receipt content, or a fixed-height page
  *    either feeds a long blank strip or shrinks the text to nothing.
  */
-async function printReceiptPdfWindows(deviceName, plainText, title) {
+async function printReceiptPdfWindows(deviceName, plainText, title, options = {}) {
   const name = String(deviceName || "").trim();
   if (!name) return { ok: false, error: "No printer name" };
   const body = String(plainText || "").trim();
-  if (!body) return { ok: false, error: "Nothing to print" };
+  const htmlReceipt = String(options.htmlReceipt || "").trim();
+  if (!body && !htmlReceipt) {
+    return { ok: false, error: "Nothing to print" };
+  }
 
   const sumatraPdfPath = resolveSumatraPdfPath();
   if (!sumatraPdfPath) {
@@ -35,11 +38,15 @@ async function printReceiptPdfWindows(deviceName, plainText, title) {
     };
   }
 
-  const safe = body
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-  const doc = wrapThermalPrintDocument(`<pre>${safe}</pre>`, title || "Receipt");
+  const doc = htmlReceipt
+    ? htmlReceipt
+    : wrapThermalPrintDocument(
+        `<pre>${body
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")}</pre>`,
+        title || "Receipt",
+      );
 
   const printDir = path.join(app.getPath("temp"), "khaanz-print");
   fs.mkdirSync(printDir, { recursive: true });

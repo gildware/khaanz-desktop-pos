@@ -313,6 +313,7 @@ export type KhaanzDesktopApi = {
     | { ok: false; error: string }
   >;
   printSilentHtml: (html: string, title?: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+  openCashDrawer: (deviceName?: string) => Promise<{ ok: true } | { ok: false; error: string }>;
   printReceiptText: (
     text: string,
     title?: string,
@@ -320,6 +321,8 @@ export type KhaanzDesktopApi = {
       logoDataUrl?: string;
       logoMaxWidthMm?: number;
       logoMaxHeightMm?: number;
+      openCashDrawer?: boolean;
+      htmlReceipt?: string;
     },
   ) => Promise<{ ok: true } | { ok: false; error: string }>;
   getPrinterStatus: (opts?: { includeDiagnostics?: boolean }) => Promise<{

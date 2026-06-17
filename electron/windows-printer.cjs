@@ -1,12 +1,18 @@
 const fs = require("fs");
 const path = require("path");
-const { buildEscPosBuffer, buildPlainTextBuffer, toAsciiSafe } = require("./escpos-buffer.cjs");
+const {
+  buildEscPosBuffer,
+  buildPlainTextBuffer,
+  buildCashDrawerKickBuffer,
+  buildCashDrawerKickBufferDle,
+  toAsciiSafe,
+} = require("./escpos-buffer.cjs");
 const { runPowerShellScript, psQuote } = require("./print-ps.cjs");
 const { getPrintTempDir } = require("./print-temp.cjs");
 const { printViaNotepadPtWindows, powershellSucceeded } = require("./print-notepad.cjs");
 const { printViaShellPrinttoWindows } = require("./print-shell-printto.cjs");
 const { printGdiDotNetWindows } = require("./print-gdi-dotnet.cjs");
-const { printEscPosToPortWindows } = require("./print-port-raw.cjs");
+const { printEscPosToPortWindows, writeRawBytesToPrinterPortWindows } = require("./print-port-raw.cjs");
 const {
   resolveWindowsPrinterName,
   resolveWindowsPrinterNameCached,
@@ -256,8 +262,8 @@ async function printEscPosRawBytesWindows(resolvedName, bytes) {
   };
 }
 
-async function printEscPosRawWindows(resolvedName, text) {
-  return printEscPosRawBytesWindows(resolvedName, buildEscPosBuffer(text));
+async function printEscPosRawWindows(resolvedName, text, options = {}) {
+  return printEscPosRawBytesWindows(resolvedName, buildEscPosBuffer(text, options));
 }
 
 /** Fallback: plain text via Out-Printer. */
@@ -334,6 +340,8 @@ function buildWindowsPrintAttempts(name, body, title, options = {}) {
   const safeTitle = title || "Receipt";
   const useElectronPrint = Boolean(process.versions.electron) && !options.skipElectronPrint;
   const gdiReceipt = options.gdiReceipt !== false;
+  const escPosOpts = options.kickDrawer ? { kickDrawer: true } : {};
+  const htmlReceipt = String(options.htmlReceipt || "").trim();
 
   // GDI driver print — the same silent path Petpooja-style POS apps use, in order of
   // reliability:
@@ -348,14 +356,20 @@ function buildWindowsPrintAttempts(name, body, title, options = {}) {
   if (useElectronPrint) {
     gdiAttempts.push({
       methodId: "pdf",
-      run: () => require("./print-pdf-windows.cjs").printReceiptPdfWindows(name, body, safeTitle),
+      run: () =>
+        require("./print-pdf-windows.cjs").printReceiptPdfWindows(name, body, safeTitle, {
+          htmlReceipt,
+        }),
     });
   }
   gdiAttempts.push({ methodId: "dotnet-gdi", run: () => printGdiDotNetWindows(name, body) });
   if (useElectronPrint) {
     gdiAttempts.push({
       methodId: "gdi",
-      run: () => require("./print-gdi-windows.cjs").printReceiptGdiWindows(name, body, safeTitle),
+      run: () =>
+        require("./print-gdi-windows.cjs").printReceiptGdiWindows(name, body, safeTitle, {
+          htmlReceipt,
+        }),
     });
   }
   gdiAttempts.push(
@@ -368,9 +382,9 @@ function buildWindowsPrintAttempts(name, body, title, options = {}) {
   // fallback for every printer (not only "raw" queues) so the bill still prints when
   // the GDI driver path fails on the shop PC.
   const rawAttempts = [
-    { methodId: "escpos-raw", run: () => printEscPosRawWindows(name, body) },
+    { methodId: "escpos-raw", run: () => printEscPosRawWindows(name, body, escPosOpts) },
     { methodId: "text-raw", run: () => printTextRawWindows(name, body) },
-    { methodId: "port-raw", run: () => printEscPosToPortWindows(name, body) },
+    { methodId: "port-raw", run: () => printEscPosToPortWindows(name, body, escPosOpts) },
     { methodId: "out-printer", run: () => printPlainTextOutPrinter(name, body) },
   ];
 
@@ -590,11 +604,49 @@ async function printPlainTextWindows(deviceName, text, title, options = {}) {
   };
 }
 
+/** Pulse the cash drawer — direct port write first (works with GDI drivers like BillQuick). */
+async function openCashDrawerWindows(deviceName) {
+  const wanted = String(deviceName || "").trim();
+  if (!wanted) {
+    return { ok: false, error: "No printer selected." };
+  }
+  const ctx = await getWindowsPrinterContext(wanted);
+  if (!ctx.ok) {
+    return { ok: false, error: ctx.detail || ctx.error || friendlyWindowsPrintError("") };
+  }
+  const name = ctx.resolvedName || ctx.name;
+  const kicks = [
+    { label: "port-pin0", bytes: buildCashDrawerKickBuffer(0), port: true },
+    { label: "port-pin1", bytes: buildCashDrawerKickBuffer(1), port: true },
+    { label: "port-dle", bytes: buildCashDrawerKickBufferDle(), port: true },
+    { label: "raw-pin0", bytes: buildCashDrawerKickBuffer(0), port: false },
+    { label: "raw-pin1", bytes: buildCashDrawerKickBuffer(1), port: false },
+    { label: "raw-dle", bytes: buildCashDrawerKickBufferDle(), port: false },
+  ];
+
+  const errors = [];
+  for (const kick of kicks) {
+    const r = kick.port
+      ? await writeRawBytesToPrinterPortWindows(name, kick.bytes)
+      : await printEscPosRawBytesWindows(name, kick.bytes);
+    if (r.ok) {
+      return { ok: true, method: `cash-drawer-${kick.label}`, deviceName: name };
+    }
+    errors.push(`${kick.label}: ${r.error || "failed"}`);
+  }
+
+  return {
+    ok: false,
+    error: errors.filter(Boolean).join(" | ") || "Cash drawer pulse failed.",
+  };
+}
+
 module.exports = {
   resolveWindowsPrinterName,
   checkWindowsPrinterOnline,
   getWindowsPrinterDiagnostics,
   printPlainTextWindows,
+  openCashDrawerWindows,
   buildWindowsPrintAttempts,
   friendlyWindowsPrintError,
 };

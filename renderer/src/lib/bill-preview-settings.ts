@@ -113,6 +113,27 @@ export function normalizeLogoSizePercent(raw: unknown): number {
   return Math.min(BILL_LOGO_SIZE_MAX, Math.max(BILL_LOGO_SIZE_MIN, Math.round(n)));
 }
 
+export function billPreviewSettingsEqual(
+  a: BillPreviewSettings,
+  b: BillPreviewSettings,
+): boolean {
+  return (
+    a.themeId === b.themeId &&
+    a.logoDataUrl === b.logoDataUrl &&
+    a.logoSizePercent === b.logoSizePercent &&
+    a.restaurantName === b.restaurantName &&
+    a.restaurantPhone === b.restaurantPhone &&
+    a.restaurantAddress === b.restaurantAddress &&
+    a.footerNotes === b.footerNotes &&
+    a.showLogo === b.showLogo &&
+    a.showRestaurantName === b.showRestaurantName &&
+    a.showPhone === b.showPhone &&
+    a.showAddress === b.showAddress &&
+    a.showOrderId === b.showOrderId &&
+    a.showFooterNotes === b.showFooterNotes
+  );
+}
+
 export function normalizeBillPreviewSettings(
   raw: Partial<BillPreviewSettings> & Record<string, unknown> | null | undefined,
 ): BillPreviewSettings {

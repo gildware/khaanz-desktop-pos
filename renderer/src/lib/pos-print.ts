@@ -205,7 +205,15 @@ function buildThermalStyle(layout?: BillPrintLayout): string {
     print-color-adjust: exact;
   }
   ${r} .bill-receipt { width: 100%; }
-  ${r} .logo-wrap { text-align: center; margin: 0 auto 2px; width: 100%; line-height: 0; }
+  ${r} .logo-wrap {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    margin: 0 auto 4px;
+    width: 100%;
+    line-height: 0;
+  }
   ${r} .logo-wrap img.logo {
     display: block;
     margin: 0 auto;
@@ -229,25 +237,68 @@ function buildThermalStyle(layout?: BillPrintLayout): string {
   ${r} .meta-row .fulfill { font-weight: ${weightNum + 100}; font-size: 12px; }
   ${r} .time-line { font-size: 11px; margin: 0 0 4px; }
   ${r} .pre { white-space: pre-wrap; font-size: 11px; margin: 4px 0; text-align: ${align}; }
-  ${r} .footer-note { white-space: pre-wrap; font-size: 11px; margin: 4px 0; text-align: center; }
+  ${r} .footer-notes { margin: 16px 0 22px; }
+  ${r} .footer-note { white-space: pre-wrap; font-size: 11px; margin: 3px 0; text-align: center; }
   ${r} .muted { font-size: 11px; margin: 3px 0; }
-  ${r} table { width: 100%; border-collapse: collapse; margin: 6px 0; }
-  ${r} table.item-table { table-layout: fixed; }
-  ${r} table.item-table .col-item { width: 46%; }
-  ${r} table.item-table .col-qty { width: 14%; }
-  ${r} table.item-table .col-price { width: 20%; }
-  ${r} table.item-table .col-amt { width: 20%; }
-  ${r} table.item-table td:first-child,
-  ${r} table.item-table th:first-child { word-break: break-word; overflow-wrap: anywhere; }
-  ${r} table.kot-table { table-layout: fixed; }
-  ${r} table.kot-table .col-item { width: 78%; }
-  ${r} table.kot-table .col-qty { width: 22%; }
-  ${r} th, ${r} td { padding: 2px 0; text-align: left; vertical-align: top; font-size: 11px; }
-  ${r} th { border-bottom: 1px solid #000; font-weight: ${weightNum}; }
-  ${r} .right { text-align: right; white-space: nowrap; }
+  ${r} table { width: 100%; margin: 8px 0 10px; }
+  ${r} table.item-table,
+  ${r} table.kot-table {
+    table-layout: fixed;
+    width: 100%;
+    border-collapse: collapse;
+    font-weight: 400;
+  }
+  ${r} table.item-table col.col-item { width: 44%; }
+  ${r} table.item-table col.col-qty { width: 12%; }
+  ${r} table.item-table col.col-price { width: 22%; }
+  ${r} table.item-table col.col-amt { width: 22%; }
+  ${r} table.kot-table col.col-item { width: 76%; }
+  ${r} table.kot-table col.col-qty { width: 24%; }
+  ${r} table.item-table thead th.col-head,
+  ${r} table.kot-table thead th.col-head {
+    font-weight: 800;
+    font-size: 11px;
+    line-height: 1.2;
+    white-space: nowrap;
+    vertical-align: bottom;
+    padding: 0 0 8px;
+    border-bottom: 1.5px solid #000;
+    text-align: left;
+  }
+  ${r} table.item-table thead th.col-head.right,
+  ${r} table.kot-table thead th.col-head.right,
+  ${r} table.item-table tbody td.col-qty,
+  ${r} table.item-table tbody td.col-price,
+  ${r} table.item-table tbody td.col-amt,
+  ${r} table.kot-table tbody td.col-qty {
+    text-align: right;
+    white-space: nowrap;
+    vertical-align: top;
+  }
+  ${r} table.item-table tbody td.col-item,
+  ${r} table.kot-table tbody td.col-item {
+    text-align: left;
+    vertical-align: top;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    padding-right: 4px;
+  }
+  ${r} table.item-table tbody td,
+  ${r} table.kot-table tbody td {
+    padding: 0;
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 1.45;
+  }
+  ${r} table.item-table tbody tr.item-line td,
+  ${r} table.kot-table tbody tr.item-line td {
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
   ${r} .totals-row { display: flex; justify-content: space-between; font-size: 11px; margin: 4px 0; }
-  ${r} .grand-total { display: flex; justify-content: space-between; align-items: baseline; font-size: ${grandSize}px; font-weight: ${weightNum + 100}; margin: 8px 0 4px; white-space: nowrap; }
-  ${r} .grand-total span { white-space: nowrap; }
+  ${r} .grand-total { display: flex; justify-content: space-between; align-items: baseline; font-size: ${grandSize}px; font-weight: 700; margin: 8px 0 4px; white-space: nowrap; }
+  ${r} .grand-total span { white-space: nowrap; font-weight: 700; }
   ${r} .payment-status { font-size: 11px; margin: 4px 0; }
   ${r} .receipt-tail { height: 24px; }
   ${r} tr.addon-line td { font-size: 10px; line-height: 1.3; }
@@ -288,10 +339,21 @@ export function formatBillDateTime(d: Date): string {
 /** Fixed sample timestamp for Settings bill previews. */
 export const BILL_PREVIEW_SAMPLE_AT = new Date(2026, 5, 3, 23, 20);
 
+/** Daily bill sequence from refs like KH-200426001 → "1". */
+function parseDailyBillNumberFromOrderRef(orderRef: string | null): string | null {
+  if (!orderRef) return null;
+  const m = orderRef.trim().match(/^KH-\d{6}(\d+)$/i);
+  if (!m) return null;
+  const n = Number.parseInt(m[1]!, 10);
+  if (!Number.isFinite(n) || n < 1) return null;
+  return String(n);
+}
+
 function extractBillNumber(orderRef: string | null): string {
+  const daily = parseDailyBillNumberFromOrderRef(orderRef);
+  if (daily) return daily;
   if (!orderRef) return "—";
-  const m = orderRef.match(/(\d+)\s*$/);
-  return m ? m[1]! : orderRef;
+  return orderRef;
 }
 
 function formatOrderIdForBill(orderRef: string | null, layout?: BillPrintLayout): string {
@@ -393,8 +455,38 @@ function formatPlainReceiptNumHeader(): string {
   return `${padPlainField("Qty", PLAIN_QTY_COL_W)} ${padPlainField("Price", PLAIN_PRICE_COL_W)} ${padPlainField("Amt", PLAIN_AMT_COL_W)}`;
 }
 
+/** Item + Qty/Price/Amt on one line — avoids thermal wrap splitting the header row. */
+function formatPlainReceiptHeaderLine(width = PLAIN_WIDTH): string {
+  const nums = formatPlainReceiptNumHeader();
+  const itemColW = Math.max(4, width - nums.length);
+  return `${"Item".padEnd(itemColW)}${nums}`.slice(0, width);
+}
+
 function formatPlainReceiptNums(qty: number, unit: number, subtotal: number): string {
   return `${padPlainField(String(qty), PLAIN_QTY_COL_W)} ${padPlainField(unit.toFixed(2), PLAIN_PRICE_COL_W)} ${padPlainField(subtotal.toFixed(2), PLAIN_AMT_COL_W)}`;
+}
+
+function formatPlainReceiptItemRows(
+  label: string,
+  qty: number,
+  unit: number,
+  subtotal: number,
+  width = PLAIN_WIDTH,
+): string[] {
+  const nums = formatPlainReceiptNums(qty, unit, subtotal);
+  const itemColW = Math.max(1, width - nums.length);
+  const trimmed = label.trim();
+  if (trimmed.length <= itemColW) {
+    return [`${trimmed.padEnd(itemColW)}${nums}`.slice(0, width)];
+  }
+  const rows: string[] = [];
+  rows.push(`${trimmed.slice(0, itemColW)}${nums}`.slice(0, width));
+  let pos = itemColW;
+  while (pos < trimmed.length) {
+    rows.push(trimmed.slice(pos, pos + width));
+    pos += width;
+  }
+  return rows;
 }
 
 function formatBillAmountPlain(amount: number): string {
@@ -511,15 +603,20 @@ export function buildBillPlainText(o: PosBillPrintOptions): string {
   if (o.proforma) lines.push("PROFORMA".slice(0, PLAIN_WIDTH));
   lines.push(rule());
 
-  lines.push(padPlain("Item", formatPlainReceiptNumHeader()));
+  lines.push(formatPlainReceiptHeaderLine());
+  lines.push("");
   for (const r of o.lines) {
-    lines.push(r.label.slice(0, PLAIN_WIDTH));
-    lines.push(padPlain("", formatPlainReceiptNums(r.qty, r.unit, r.subtotal)));
-    for (const a of r.addonRows ?? []) {
-      lines.push(`+ ${a.name}`.slice(0, PLAIN_WIDTH));
-      lines.push(padPlain("", formatPlainReceiptNums(a.qty, a.unit, a.subtotal)));
+    for (const row of formatPlainReceiptItemRows(r.label, r.qty, r.unit, r.subtotal)) {
+      lines.push(row);
     }
+    for (const a of r.addonRows ?? []) {
+      for (const row of formatPlainReceiptItemRows(`+ ${a.name}`, a.qty, a.unit, a.subtotal)) {
+        lines.push(row);
+      }
+    }
+    lines.push("");
   }
+  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
   lines.push(rule());
 
   const totalQty = o.lines.reduce((s, r) => s + r.qty, 0);
@@ -538,8 +635,13 @@ export function buildBillPlainText(o: PosBillPrintOptions): string {
     : (layout?.unpaidLabel ?? "Not Paid");
   lines.push(payStatus.slice(0, PLAIN_WIDTH));
   if (layout?.showFooterNotes !== false) {
-    for (const f of splitLines(layout?.footerNotes ?? "")) {
-      lines.push(centerPlain(f).slice(0, PLAIN_WIDTH));
+    const footerLines = splitLines(layout?.footerNotes ?? "");
+    if (footerLines.length) {
+      lines.push("");
+      for (const f of footerLines) {
+        lines.push(centerPlain(f).slice(0, PLAIN_WIDTH));
+      }
+      lines.push("");
     }
   }
   if (o.notes.trim()) lines.push(`Note: ${o.notes.trim()}`.slice(0, PLAIN_WIDTH));
@@ -562,12 +664,15 @@ export function buildKotPlainText(o: PosKotPrintOptions): string {
   if (o.notes.trim()) lines.push(`Note: ${o.notes.trim()}`.slice(0, PLAIN_WIDTH));
   lines.push(plainRule());
   lines.push(padPlain("Item", padPlainField("Qty", PLAIN_KOT_QTY_COL_W)));
+  lines.push("");
   for (const r of o.lines) {
     lines.push(padPlain(r.label, padPlainField(String(r.qty), PLAIN_KOT_QTY_COL_W)));
     for (const a of r.addonRows ?? []) {
       lines.push(padPlain(`+ ${a.name}`, padPlainField(String(a.qty), PLAIN_KOT_QTY_COL_W)));
     }
+    lines.push("");
   }
+  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
   lines.push("");
   return lines.join("\n");
 }
@@ -579,14 +684,14 @@ export function buildBillHtmlBody(o: PosBillPrintOptions): string {
   const now = o.printedAt ?? new Date();
   const rows = o.lines
     .flatMap((r) => {
-      const main = `<tr><td>${escapeHtml(r.label)}</td><td class="right">${r.qty}</td><td class="right">${r.unit.toFixed(
+      const main = `<tr class="item-line"><td class="col-item">${escapeHtml(r.label)}</td><td class="col-qty">${r.qty}</td><td class="col-price">${r.unit.toFixed(
         2,
-      )}</td><td class="right">${r.subtotal.toFixed(2)}</td></tr>`;
+      )}</td><td class="col-amt">${r.subtotal.toFixed(2)}</td></tr>`;
       const subs = (r.addonRows ?? []).map(
         (a) =>
-          `<tr class="addon-line"><td class="iname">+ ${escapeHtml(a.name)}</td><td class="right">${a.qty}</td><td class="right">${a.unit.toFixed(
+          `<tr class="addon-line"><td class="col-item iname">+ ${escapeHtml(a.name)}</td><td class="col-qty">${a.qty}</td><td class="col-price">${a.unit.toFixed(
             2,
-          )}</td><td class="right">${a.subtotal.toFixed(2)}</td></tr>`,
+          )}</td><td class="col-amt">${a.subtotal.toFixed(2)}</td></tr>`,
       );
       return [main, ...subs];
     })
@@ -606,9 +711,12 @@ export function buildBillHtmlBody(o: PosBillPrintOptions): string {
   const headerHtml = headerLines.map((l) => `<div class="pre">${escapeHtml(l)}</div>`).join("");
   const customFooterHtml =
     layout?.showFooterNotes !== false
-      ? splitLines(layout?.footerNotes ?? "")
-          .map((l) => `<div class="footer-note">${escapeHtml(l)}</div>`)
-          .join("")
+      ? (() => {
+          const notes = splitLines(layout?.footerNotes ?? "")
+            .map((l) => `<div class="footer-note">${escapeHtml(l)}</div>`)
+            .join("");
+          return notes ? `<div class="footer-notes">${notes}</div>` : "";
+        })()
       : "";
 
   const logoSrc = layout?.logoSrc?.trim() ?? "";
@@ -682,7 +790,7 @@ ${proformaLine}
 <col class="col-price" />
 <col class="col-amt" />
 </colgroup>
-<thead><tr><th>Item</th><th class="right">Qty.</th><th class="right">Price</th><th class="right">Amount</th></tr></thead>
+<thead><tr><th class="col-head">Item</th><th class="col-head right">Qty</th><th class="col-head right">Price</th><th class="col-head right">Amt</th></tr></thead>
 <tbody>${rows}</tbody>
 </table>
 <hr class="${rule}"/>
@@ -704,12 +812,12 @@ export function buildKotHtmlBody(o: PosKotPrintOptions): string {
   const headerHtml = headerLines.map((l) => `<div class="pre">${escapeHtml(l)}</div>`).join("");
   const rows = o.lines
     .flatMap((r) => {
-      const main = `<tr><td>${escapeHtml(r.label)}</td><td class="right">${r.qty}</td></tr>`;
+      const main = `<tr class="item-line"><td class="col-item">${escapeHtml(r.label)}</td><td class="col-qty">${r.qty}</td></tr>`;
       const subs = (r.addonRows ?? []).map(
         (a) =>
-          `<tr class="addon-line"><td class="iname">+ ${escapeHtml(
+          `<tr class="addon-line"><td class="col-item iname">+ ${escapeHtml(
             a.name,
-          )}</td><td class="right">${a.qty}</td></tr>`,
+          )}</td><td class="col-qty">${a.qty}</td></tr>`,
       );
       return [main, ...subs];
     })
@@ -730,7 +838,7 @@ ${o.notes.trim() ? `<div class="muted">Note: ${escapeHtml(o.notes.trim())}</div>
 <col class="col-item" />
 <col class="col-qty" />
 </colgroup>
-<thead><tr><th>Item</th><th class="right">Qty</th></tr></thead>
+<thead><tr><th class="col-head">Item</th><th class="col-head right">Qty</th></tr></thead>
 <tbody>${rows}</tbody>
 </table>
 `;
@@ -740,6 +848,9 @@ export type ReceiptPrintOptions = {
   logoDataUrl?: string;
   logoMaxWidthMm?: number;
   logoMaxHeightMm?: number;
+  openCashDrawer?: boolean;
+  /** Full HTML receipt — used by Windows GDI/PDF print so output matches Settings preview. */
+  htmlReceipt?: string;
 };
 
 type DesktopPrintBridge = {
@@ -749,6 +860,7 @@ type DesktopPrintBridge = {
     title?: string,
     options?: ReceiptPrintOptions,
   ) => Promise<{ ok: boolean; error?: string }>;
+  openCashDrawer?: (deviceName?: string) => Promise<{ ok: boolean; error?: string }>;
   getPlatform?: () => Promise<string>;
 };
 
@@ -853,7 +965,7 @@ export function buildBillPreviewSampleOptions(
     restaurantName: layout.restaurantDisplayName.trim() || restaurantName.trim() || "Khaanz",
     billHeader: "",
     billFooter: "",
-    orderRef: "ORD-3516",
+    orderRef: "KH-030625016",
     proforma: false,
     notes: "",
     paymentLabel: "",
@@ -901,7 +1013,7 @@ export function buildKotPreviewSampleOptions(
   return {
     restaurantName: bill.restaurantName,
     billHeader: bill.billHeader,
-    orderRef: bill.orderRef ?? "3516",
+    orderRef: bill.orderRef ?? "KH-030625016",
     fulfillmentLabel: bill.fulfillmentLabel,
     dineInTable: bill.dineInTable,
     notes: "Sample kitchen note",
@@ -925,10 +1037,14 @@ export async function printPosBillThermal(
     throw new Error("Print is not available in this environment.");
   }
 
-  const printOptions = receiptPrintOptionsFromLayout(options.layout);
+  const printOptions = {
+    ...receiptPrintOptionsFromLayout(options.layout),
+    openCashDrawer: true,
+    htmlReceipt: buildBillPreviewDocument(options),
+  };
   const hasLogo = Boolean(printOptions?.logoDataUrl);
   const plainText = buildBillPlainText(options);
-  const htmlDoc = buildBillPreviewDocument(options);
+  const htmlDoc = printOptions.htmlReceipt;
   const htmlTimeout = hasLogo ? PRINT_IPC_TIMEOUT_WITH_LOGO_MS : PRINT_IPC_TIMEOUT_MS;
 
   if (desktop.printReceiptText) {
@@ -936,9 +1052,10 @@ export async function printPosBillThermal(
       await sendReceiptToDesktop(desktop, plainText, "Bill", printOptions);
       return;
     } catch (primaryErr) {
-      if (!hasLogo || !desktop.printSilentHtml) throw primaryErr;
+      if (!desktop.printSilentHtml) throw primaryErr;
       try {
         await sendHtmlReceiptToDesktop(desktop, htmlDoc, "Bill", htmlTimeout);
+        await openCashDrawerIfAvailable(desktop);
         return;
       } catch (htmlErr) {
         const primaryMsg =
@@ -952,6 +1069,7 @@ export async function printPosBillThermal(
   }
 
   await sendHtmlReceiptToDesktop(desktop, htmlDoc, "Bill", htmlTimeout);
+  await openCashDrawerIfAvailable(desktop);
 }
 
 export async function printPosKotThermal(
@@ -966,5 +1084,17 @@ export async function printPosKotThermal(
   }
 
   const plainText = buildKotPlainText(options);
-  await sendReceiptToDesktop(desktop, plainText, "KOT");
+  await sendReceiptToDesktop(desktop, plainText, "KOT", {
+    htmlReceipt: buildKotPreviewDocument(options),
+  });
+}
+
+/** Pulse the cash drawer on the receipt printer — best effort, never throws. */
+export async function openCashDrawerIfAvailable(desktop?: DesktopPrintBridge): Promise<void> {
+  if (!desktop?.openCashDrawer) return;
+  try {
+    await desktop.openCashDrawer();
+  } catch {
+    /* Drawer kick is optional — don't block checkout. */
+  }
 }

@@ -4,6 +4,7 @@ import {
   BILL_LOGO_SIZE_MAX,
   BILL_LOGO_SIZE_MIN,
   BILL_THEMES,
+  billPreviewSettingsEqual,
   DEFAULT_BILL_PREVIEW_SETTINGS,
   mergeBillPrintLayout,
   normalizeBillPreviewSettings,
@@ -117,7 +118,8 @@ function ReceiptPreviewFrame({ title, srcDoc }: { title: string; srcDoc: string 
       <div className="mx-auto w-full max-w-[300px] overflow-hidden rounded-md border-2 border-neutral-400 bg-white shadow-sm">
         <iframe
           title={title}
-          className="block h-[min(300px,36vh)] w-full border-0 bg-white grayscale contrast-125"
+          tabIndex={-1}
+          className="pointer-events-none block h-[min(420px,48vh)] w-full border-0 bg-white"
           srcDoc={srcDoc}
         />
       </div>
@@ -144,12 +146,14 @@ export function BillPreviewSettingsPanel({
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const skipAutoSaveRef = useRef(true);
+  const dirtyRef = useRef(false);
   const persistRef = useRef<(next: BillPreviewSettings) => Promise<void>>(async () => {});
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     skipAutoSaveRef.current = true;
+    dirtyRef.current = false;
     try {
       const r = await desktop.getBillPreviewSettings();
       if (!r.ok) {
@@ -216,9 +220,16 @@ export function BillPreviewSettingsPanel({
           return;
         }
         const saved = normalizeBillPreviewSettings(r.settings);
-        setSettings(saved);
+        dirtyRef.current = false;
+        skipAutoSaveRef.current = true;
+        if (!billPreviewSettingsEqual(next, saved)) {
+          setSettings(saved);
+        }
         onSaved?.(saved);
         setMessage("Saved — bills will print with this layout.");
+        window.setTimeout(() => {
+          skipAutoSaveRef.current = false;
+        }, 0);
       } catch (e) {
         setError(String(e instanceof Error ? e.message : e));
       } finally {
@@ -231,7 +242,7 @@ export function BillPreviewSettingsPanel({
   persistRef.current = persist;
 
   useEffect(() => {
-    if (loading || skipAutoSaveRef.current) return;
+    if (loading || skipAutoSaveRef.current || !dirtyRef.current) return;
     const timer = window.setTimeout(() => {
       void persistRef.current(settings);
     }, 600);
@@ -239,6 +250,7 @@ export function BillPreviewSettingsPanel({
   }, [settings, loading]);
 
   const update = (patch: Partial<BillPreviewSettings>) => {
+    dirtyRef.current = true;
     setSettings((prev) => normalizeBillPreviewSettings({ ...prev, ...patch }));
     setMessage("");
   };
@@ -367,6 +379,7 @@ export function BillPreviewSettingsPanel({
                     onChange={(e) =>
                       update({ logoSizePercent: Number.parseInt(e.target.value, 10) })
                     }
+                    onWheel={(e) => e.currentTarget.blur()}
                     className="min-w-0 flex-1 accent-primary"
                   />
                   <span className="w-9 shrink-0 text-right font-mono text-xs tabular-nums">
@@ -477,7 +490,7 @@ export function BillPreviewSettingsPanel({
           {error ? <p className="text-destructive text-xs">{error}</p> : null}
         </section>
 
-        <section className="min-w-0 space-y-3 lg:sticky lg:top-4 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:border-l lg:pl-5">
+        <section className="min-w-0 space-y-3 lg:sticky lg:top-4 lg:self-start lg:border-l lg:pl-5">
           <p className="font-medium text-sm">Thermal preview</p>
           <div className="space-y-4">
             {billPreviewDocs.map((preview) => (

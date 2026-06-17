@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const { spawn } = require("child_process");
-const { buildEscPosBuffer, buildPlainTextBuffer } = require("./escpos-buffer.cjs");
+const { buildEscPosBuffer, buildPlainTextBuffer, buildCashDrawerKickBuffer } = require("./escpos-buffer.cjs");
 const { appendPrintLog } = require("./print-log.cjs");
 const { printReceiptElectron } = require("./print-electron-receipt.cjs");
 const { reorderAttempts } = require("./print-strategy-windows.cjs");
@@ -378,10 +378,47 @@ async function printPlainTextMac(printerName, text, title, options = {}) {
   };
 }
 
+/** Pulse the cash drawer on the CUPS receipt queue. */
+async function openCashDrawerMac(deviceName) {
+  const wanted = String(deviceName || "").trim();
+  if (!wanted) {
+    return { ok: false, error: "No printer selected." };
+  }
+  const cupsName = await resolveCupsQueueNameCached(wanted);
+  if (!cupsName) {
+    return { ok: false, error: "Printer not found." };
+  }
+
+  const { buildCashDrawerKickBufferDle } = require("./escpos-buffer.cjs");
+  const kicks = [
+    buildCashDrawerKickBuffer(0),
+    buildCashDrawerKickBuffer(1),
+    buildCashDrawerKickBufferDle(),
+  ];
+  const errors = [];
+  for (let i = 0; i < kicks.length; i++) {
+    try {
+      await lprBuffer(
+        cupsName,
+        kicks[i],
+        "Cash drawer",
+        true,
+        `cash-drawer-${i}`,
+        LPR_TIMEOUT_MS,
+      );
+      return { ok: true, method: "escpos-cash-drawer", deviceName: cupsName };
+    } catch (e) {
+      errors.push(String(e && e.message ? e.message : e));
+    }
+  }
+  return { ok: false, error: errors.join(" | ") || "Cash drawer pulse failed." };
+}
+
 module.exports = {
   checkMacPrinterOnline,
   resolveCupsQueueName,
   resolveCupsQueueNameCached,
   clearCupsQueueCache,
   printPlainTextMac,
+  openCashDrawerMac,
 };

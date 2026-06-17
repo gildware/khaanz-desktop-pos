@@ -5,11 +5,11 @@ const { runPowerShellScript, psQuote } = require("./print-ps.cjs");
 const { powershellSucceeded } = require("./print-notepad.cjs");
 const { getPrintTempDir } = require("./print-temp.cjs");
 
-/** Write ESC/POS bytes directly to USB/COM printer port (true thermal hardware). */
-async function printEscPosToPortWindows(resolvedName, text) {
+/** Write raw bytes directly to USB/COM printer port (bypasses GDI drivers). */
+async function writeRawBytesToPrinterPortWindows(resolvedName, bytes) {
   const dir = getPrintTempDir();
   const binPath = path.join(dir, `raw-${Date.now()}.bin`);
-  fs.writeFileSync(binPath, buildEscPosBuffer(text));
+  fs.writeFileSync(binPath, bytes);
 
   const script = [
     "$ErrorActionPreference = 'Stop'",
@@ -48,4 +48,9 @@ async function printEscPosToPortWindows(resolvedName, text) {
   return { ok: false, error: msg || "Port write failed" };
 }
 
-module.exports = { printEscPosToPortWindows };
+/** Write ESC/POS bytes directly to USB/COM printer port (true thermal hardware). */
+async function printEscPosToPortWindows(resolvedName, text, options = {}) {
+  return writeRawBytesToPrinterPortWindows(resolvedName, buildEscPosBuffer(text, options));
+}
+
+module.exports = { printEscPosToPortWindows, writeRawBytesToPrinterPortWindows };

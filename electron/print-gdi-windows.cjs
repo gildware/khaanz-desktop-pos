@@ -8,17 +8,22 @@ const { wrapThermalPrintDocument } = require("./thermal-print.cjs");
  * Petpooja-style printing: Chromium GDI job through the Windows printer driver.
  * Works with BillQuick Lite / POS 203DPI GDI drivers that ignore RAW ESC/POS.
  */
-async function printReceiptGdiWindows(deviceName, plainText, title) {
+async function printReceiptGdiWindows(deviceName, plainText, title, options = {}) {
   const name = String(deviceName || "").trim();
   if (!name) return { ok: false, error: "No printer name" };
   const body = String(plainText || "").trim();
-  if (!body) return { ok: false, error: "Nothing to print" };
+  const htmlReceipt = String(options.htmlReceipt || "").trim();
+  if (!body && !htmlReceipt) return { ok: false, error: "Nothing to print" };
 
-  const safe = body
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-  const doc = wrapThermalPrintDocument(`<pre>${safe}</pre>`, title || "Receipt");
+  const doc = htmlReceipt
+    ? htmlReceipt
+    : wrapThermalPrintDocument(
+        `<pre>${body
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")}</pre>`,
+        title || "Receipt",
+      );
 
   const printDir = path.join(app.getPath("temp"), "khaanz-print");
   fs.mkdirSync(printDir, { recursive: true });

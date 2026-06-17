@@ -1,5 +1,5 @@
 const { nativeImage } = require("electron");
-const { toAsciiSafe, ESCPOS_TAIL_FEED } = require("./escpos-buffer.cjs");
+const { toAsciiSafe, ESCPOS_TAIL_FEED, buildCashDrawerKickBuffer, pushEscPosTextLine } = require("./escpos-buffer.cjs");
 
 /** ~203 DPI thermal — 8 dots per mm on 80mm paper. */
 const DOTS_PER_MM = 8;
@@ -30,6 +30,39 @@ function centerRasterHorizontally(raster, imageWidth, imageHeight, bytesPerRow) 
     width: centeredWidth,
     bytesPerRow: centeredBytesPerRow,
   };
+}
+
+/** Trim side margins from ink bounds, then center on the printable width. */
+function trimAndCenterRasterHorizontally(raster, width, height, bytesPerRow) {
+  let left = width;
+  let right = -1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const srcByte = raster[y * bytesPerRow + (x >> 3)];
+      if ((srcByte >> (7 - (x & 7))) & 1) {
+        if (x < left) left = x;
+        if (x > right) right = x;
+      }
+    }
+  }
+  if (right < left) {
+    return { raster, width, height, bytesPerRow };
+  }
+
+  const contentW = right - left + 1;
+  const cropped = Buffer.alloc(Math.ceil(contentW / 8) * height);
+  const croppedBytesPerRow = Math.ceil(contentW / 8);
+  for (let y = 0; y < height; y++) {
+    for (let x = left; x <= right; x++) {
+      const srcByte = raster[y * bytesPerRow + (x >> 3)];
+      if ((srcByte >> (7 - (x & 7))) & 1) {
+        const destX = x - left;
+        cropped[y * croppedBytesPerRow + (destX >> 3)] |= 0x80 >> (destX & 7);
+      }
+    }
+  }
+
+  return centerRasterHorizontally(cropped, contentW, height, croppedBytesPerRow);
 }
 
 function rowHasInk(raster, y, bytesPerRow) {
@@ -65,7 +98,7 @@ function cropRgbaToInkBounds(width, height, rgba) {
       const i = (y * width + x) * 4;
       const gray = rgba[i] * 0.299 + rgba[i + 1] * 0.587 + rgba[i + 2] * 0.114;
       const alpha = rgba[i + 3] / 255;
-      if (alpha > 0.15 && gray < 235) {
+      if (alpha > 0.08 && gray < 245) {
         if (y < top) top = y;
         if (y > bottom) bottom = y;
         if (x < left) left = x;
@@ -133,18 +166,18 @@ function buildEscPosRasterFromDataUrl(dataUrl, maxWidthMm = 72, maxHeightMm = 45
       const i = (y * width + x) * 4;
       const gray = rgba[i] * 0.299 + rgba[i + 1] * 0.587 + rgba[i + 2] * 0.114;
       const alpha = rgba[i + 3] / 255;
-      const ink = alpha > 0.15 && gray < 200;
+      const ink = alpha > 0.08 && gray < 245;
       if (ink) {
         raster[y * bytesPerRow + (x >> 3)] |= 0x80 >> (x & 7);
       }
     }
   }
 
-  const centered = centerRasterHorizontally(raster, width, height, bytesPerRow);
+  const centered = trimAndCenterRasterHorizontally(raster, width, height, bytesPerRow);
   const trimmed = trimRasterVertical(
     centered.raster,
     centered.width,
-    height,
+    centered.raster.length / centered.bytesPerRow,
     centered.bytesPerRow,
   );
   if (!trimmed.height) return null;
@@ -179,10 +212,12 @@ function buildEscPosReceiptWithLogo(text, logoDataUrl, dims = {}) {
   const safe = toAsciiSafe(text).trim();
   const lines = safe.length ? safe.split("\n") : ["(empty)"];
   for (const line of lines) {
-    chunks.push(Buffer.from(line, "ascii"));
-    chunks.push(Buffer.from([0x0a]));
+    pushEscPosTextLine(chunks, line);
   }
   chunks.push(ESCPOS_TAIL_FEED);
+  if (dims.kickDrawer) {
+    chunks.push(buildCashDrawerKickBuffer(0));
+  }
   chunks.push(Buffer.from([0x1d, 0x56, 0x00]));
   return Buffer.concat(chunks);
 }

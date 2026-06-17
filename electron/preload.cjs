@@ -41,6 +41,8 @@ contextBridge.exposeInMainWorld("khaanzDesktop", {
   },
   printSilentHtml: (html, title) =>
     invoke("khaanz:print-silent-html", { html, title }),
+  openCashDrawer: (deviceName) =>
+    invoke("khaanz:open-cash-drawer", { deviceName: deviceName || "" }),
   printReceiptText: (text, title, options) =>
     invoke("khaanz:print-receipt-text", {
       text,

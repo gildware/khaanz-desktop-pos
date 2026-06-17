@@ -20,8 +20,9 @@ const {
   checkWindowsPrinterOnline,
   getWindowsPrinterDiagnostics,
   printPlainTextWindows,
+  openCashDrawerWindows,
 } = require("./windows-printer.cjs");
-const { checkMacPrinterOnline, printPlainTextMac } = require("./print-mac.cjs");
+const { checkMacPrinterOnline, printPlainTextMac, openCashDrawerMac } = require("./print-mac.cjs");
 const { printReceiptElectron } = require("./print-electron-receipt.cjs");
 const { withTimeout } = require("./print-timeout.cjs");
 const { appendPrintLog } = require("./print-log.cjs");
@@ -194,6 +195,11 @@ function migrate(db) {
       payload_json TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS order_counter_day (
+      day_key TEXT PRIMARY KEY,
+      last_seq INTEGER NOT NULL
+    );
   `);
 
   const v = db
@@ -215,7 +221,14 @@ function enqueueOfflinePosOrder(clientOrderId, body) {
     return { ok: false, error: "Invalid offline row" };
   }
   try {
-    const bodyJson = JSON.stringify(body);
+    const existing = db
+      .prepare("SELECT body_json AS bodyJson FROM offline_pos_queue WHERE client_order_id=?")
+      .get(id);
+    const orderRef = existing?.bodyJson
+      ? readStoredOrderRefFromBodyJson(existing.bodyJson) || allocateLocalOrderRef(db)
+      : allocateLocalOrderRef(db);
+    const payload = { ...body, orderRef };
+    const bodyJson = JSON.stringify(payload);
     const t0 = nowIso();
     db.prepare(
       "INSERT OR REPLACE INTO offline_pos_queue(client_order_id, body_json, created_at) VALUES(?,?,?)",
@@ -226,14 +239,63 @@ function enqueueOfflinePosOrder(clientOrderId, body) {
     ).run(
       `pos_evt_${id}`,
       "pos.orderPayload",
-      JSON.stringify({ clientOrderId: id, body }),
+      JSON.stringify({ clientOrderId: id, body: payload }),
       t0,
     );
 
-    return { ok: true };
+    return { ok: true, orderRef };
   } catch (e) {
     return { ok: false, error: String(e && e.message ? e.message : e) };
   }
+}
+
+function formatDdMMyyIST(now) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata",
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+  }).formatToParts(now);
+  const day = parts.find((p) => p.type === "day")?.value ?? "01";
+  const month = parts.find((p) => p.type === "month")?.value ?? "01";
+  const year = parts.find((p) => p.type === "year")?.value ?? "00";
+  return `${day.padStart(2, "0")}${month.padStart(2, "0")}${year.padStart(2, "0")}`;
+}
+
+function buildOrderDisplayRef(ddMMyy, seq) {
+  return `KH-${ddMMyy}${String(seq).padStart(3, "0")}`;
+}
+
+function allocateNextLocalOrderSequence(db, now) {
+  const { y, m, d } = istDateParts(now);
+  const dayKey = `${y}-${m}-${d}`;
+  const existing = db
+    .prepare("SELECT last_seq AS lastSeq FROM order_counter_day WHERE day_key=?")
+    .get(dayKey);
+  if (existing) {
+    const next = Number(existing.lastSeq || 0) + 1;
+    db.prepare("UPDATE order_counter_day SET last_seq=? WHERE day_key=?").run(next, dayKey);
+    return next;
+  }
+  db.prepare("INSERT INTO order_counter_day(day_key, last_seq) VALUES(?, 1)").run(dayKey);
+  return 1;
+}
+
+function allocateLocalOrderRef(db, now = new Date()) {
+  const seq = allocateNextLocalOrderSequence(db, now);
+  return buildOrderDisplayRef(formatDdMMyyIST(now), seq);
+}
+
+function readStoredOrderRefFromBodyJson(bodyJson) {
+  try {
+    const body = JSON.parse(bodyJson);
+    if (body && typeof body.orderRef === "string" && body.orderRef.trim()) {
+      return body.orderRef.trim();
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
 }
 
 function offlineRefForClientOrderId(clientOrderId) {
@@ -409,7 +471,7 @@ async function updatePosOrderMain(orderId, body) {
       const out = enqueueOfflinePosOrder(id, payload);
       if (!out.ok) return out;
       void trySyncOnce().catch(() => {});
-      return { ok: true, orderRef: offlineRefForClientOrderId(id) };
+      return { ok: true, orderRef: out.orderRef };
     }
     return { ok: false, error: remote.error };
   }
@@ -419,7 +481,7 @@ async function updatePosOrderMain(orderId, body) {
     const out = enqueueOfflinePosOrder(id, payload);
     if (!out.ok) return out;
     void trySyncOnce().catch(() => {});
-    return { ok: true, orderRef: offlineRefForClientOrderId(id) };
+    return { ok: true, orderRef: out.orderRef };
   }
 
   const remote = await putOrderToServer();
@@ -717,9 +779,11 @@ function buildLocalPosOrderRows() {
       /* ignore */
     }
     seen.add(r.clientOrderId);
+    const orderRef =
+      readStoredOrderRefFromBodyJson(r.bodyJson) || offlineRefForClientOrderId(r.clientOrderId);
     rows.push({
       id: r.clientOrderId,
-      orderRef: offlineRefForClientOrderId(r.clientOrderId),
+      orderRef,
       status: "PENDING",
       statusLabel: "Offline",
       fulfillment,
@@ -1694,6 +1758,8 @@ async function printReceiptWindows(printerName, body, safeTitle, receiptOpts = {
       fastPath,
       gdiReceipt: readWindowsGdiReceiptFromDb(db),
       escPosBytes: receiptOpts.escPosBytes,
+      kickDrawer: Boolean(receiptOpts.kickDrawer),
+      htmlReceipt: receiptOpts.htmlReceipt,
     }),
     90_000,
     "Windows print",
@@ -1819,6 +1885,7 @@ async function buildEscPosBytesForReceipt(body, logoOpts = {}) {
     const bytes = buildEscPosReceiptWithLogo(body, dataUrl, {
       logoMaxWidthMm: logoOpts.logoMaxWidthMm,
       logoMaxHeightMm: logoOpts.logoMaxHeightMm,
+      kickDrawer: Boolean(logoOpts.kickDrawer),
     });
     if (!bytes || !bytes.length) {
       appendPrintLog({ event: "logo-skip", reason: "Logo raster encode returned empty buffer." });
@@ -1834,6 +1901,26 @@ async function buildEscPosBytesForReceipt(body, logoOpts = {}) {
   }
 }
 
+/** Print methods that do not pass ESC/POS drawer bytes to the hardware. */
+const GDI_PRINT_METHODS = new Set([
+  "pdf",
+  "dotnet-gdi",
+  "gdi",
+  "cmd-print",
+  "shell-printto",
+  "notepad-pt",
+  "electron",
+  "dev-mock",
+  "text-raw",
+  "out-printer",
+]);
+
+function printMethodNeedsSeparateDrawerKick(method, kickDrawerRequested) {
+  if (!kickDrawerRequested) return false;
+  if (!method) return true;
+  return GDI_PRINT_METHODS.has(method);
+}
+
 /** Direct receipt print — Windows uses driver chain; macOS uses ESC/POS + Electron. */
 async function printReceiptText({
   text,
@@ -1842,6 +1929,8 @@ async function printReceiptText({
   logoDataUrl,
   logoMaxWidthMm,
   logoMaxHeightMm,
+  openCashDrawer: kickDrawer,
+  htmlReceipt,
 }) {
   const body = String(text || "").trim();
   if (!body) {
@@ -1851,6 +1940,7 @@ async function printReceiptText({
   const resolved = await resolvePrinterForReceipt(deviceOverride);
   if (!resolved.ok) return { ok: false, error: resolved.error };
   const printerName = resolved.name;
+  const kickDrawerRequested = Boolean(kickDrawer);
 
   const logoRequested = Boolean(String(logoDataUrl || "").trim());
   let escPosBytes = null;
@@ -1859,6 +1949,7 @@ async function printReceiptText({
       logoDataUrl,
       logoMaxWidthMm,
       logoMaxHeightMm,
+      kickDrawer: kickDrawerRequested,
     });
     if (!escPosBytes) {
       appendPrintLog({
@@ -1867,9 +1958,25 @@ async function printReceiptText({
       });
     }
   }
-  const receiptOpts = { ...resolved, escPosBytes };
+  let receiptHtml = String(htmlReceipt || "").trim();
+  if (receiptHtml) {
+    try {
+      receiptHtml = await inlineReceiptHtmlImages(receiptHtml);
+    } catch {
+      /* keep original html */
+    }
+  }
+  const receiptOpts = {
+    ...resolved,
+    escPosBytes,
+    kickDrawer: kickDrawerRequested,
+    htmlReceipt: receiptHtml || undefined,
+  };
 
   if (isDevMockPrintEnabled()) {
+    if (kickDrawerRequested) {
+      await openCashDrawer({ deviceName: printerName });
+    }
     return {
       ok: true,
       method: "dev-mock",
@@ -1878,21 +1985,68 @@ async function printReceiptText({
     };
   }
 
+  let r;
   if (process.platform === "win32") {
-    return printReceiptWindows(printerName, body, title || "Receipt", receiptOpts);
+    r = await printReceiptWindows(printerName, body, title || "Receipt", receiptOpts);
+  } else if (process.platform === "darwin") {
+    r = await printReceiptDarwin(printerName, body, title || "Receipt", receiptOpts);
+  } else {
+    const electron = await printReceiptElectron(printerName, body, title || "Receipt");
+    if (electron.ok) {
+      writeSilentPrinterNameToDb(db, printerName);
+      setPrinterVerified(db, printerName);
+      r = electron;
+    } else {
+      r = await withTimeout(printPlainTextViaHtmlWindow(body, title || "Receipt"), 45_000, "Print");
+    }
   }
 
-  if (process.platform === "darwin") {
-    return printReceiptDarwin(printerName, body, title || "Receipt", receiptOpts);
+  if (r.ok && printMethodNeedsSeparateDrawerKick(r.method, kickDrawerRequested)) {
+    const drawer = await openCashDrawer({ deviceName: printerName });
+    appendPrintLog({
+      event: drawer.ok ? "cash-drawer-after-print" : "cash-drawer-after-print-failed",
+      platform: process.platform,
+      printer: printerName,
+      printMethod: r.method,
+      drawerMethod: drawer.method,
+      error: drawer.ok ? undefined : drawer.error,
+    });
   }
 
-  const electron = await printReceiptElectron(printerName, body, title || "Receipt");
-  if (electron.ok) {
-    writeSilentPrinterNameToDb(db, printerName);
-    setPrinterVerified(db, printerName);
-    return electron;
+  return r;
+}
+
+/** Open the cash drawer connected to the receipt printer (ESC/POS pulse). */
+async function openCashDrawer({ deviceName } = {}) {
+  const resolved = await resolvePrinterForReceipt(deviceName);
+  if (!resolved.ok) return resolved;
+
+  if (isDevMockPrintEnabled()) {
+    appendPrintLog({
+      event: "cash-drawer",
+      method: "dev-mock",
+      printer: resolved.name,
+    });
+    return { ok: true, method: "dev-mock", deviceName: resolved.name };
   }
-  return withTimeout(printPlainTextViaHtmlWindow(body, title || "Receipt"), 45_000, "Print");
+
+  let result;
+  if (process.platform === "win32") {
+    result = await openCashDrawerWindows(resolved.name);
+  } else if (process.platform === "darwin") {
+    result = await openCashDrawerMac(resolved.name);
+  } else {
+    return { ok: false, error: "Cash drawer is not supported on this platform." };
+  }
+
+  appendPrintLog({
+    event: result.ok ? "cash-drawer" : "cash-drawer-failed",
+    platform: process.platform,
+    printer: resolved.name,
+    method: result.method,
+    error: result.ok ? undefined : result.error,
+  });
+  return result;
 }
 
 async function printLoadedReceiptPlainText(webContents, chosen, safeTitle) {
@@ -2790,6 +2944,12 @@ function registerIpc() {
     return withTimeout(printSilentHtml({ html, title }), 60_000, "Print");
   });
 
+  ipcMain.handle("khaanz:open-cash-drawer", async (_evt, payload) => {
+    const deviceName =
+      payload && typeof payload.deviceName === "string" ? payload.deviceName : "";
+    return withTimeout(openCashDrawer({ deviceName: deviceName || undefined }), 15_000, "Cash drawer");
+  });
+
   ipcMain.handle("khaanz:print-receipt-text", async (_evt, payload) => {
     const text = payload && typeof payload.text === "string" ? payload.text : "";
     const title = payload && typeof payload.title === "string" ? payload.title : "Receipt";
@@ -2801,6 +2961,9 @@ function registerIpc() {
       payload && typeof payload.logoMaxWidthMm === "number" ? payload.logoMaxWidthMm : undefined;
     const logoMaxHeightMm =
       payload && typeof payload.logoMaxHeightMm === "number" ? payload.logoMaxHeightMm : undefined;
+    const openCashDrawer = Boolean(payload && payload.openCashDrawer);
+    const htmlReceipt =
+      payload && typeof payload.htmlReceipt === "string" ? payload.htmlReceipt : "";
     return withTimeout(
       printReceiptText({
         text,
@@ -2809,6 +2972,8 @@ function registerIpc() {
         logoDataUrl: logoDataUrl || undefined,
         logoMaxWidthMm,
         logoMaxHeightMm,
+        openCashDrawer,
+        htmlReceipt: htmlReceipt || undefined,
       }),
       logoDataUrl ? 60_000 : 95_000,
       "Print",
@@ -2956,7 +3121,7 @@ function registerIpc() {
     const out = enqueueOfflinePosOrder(id, body);
     if (!out.ok) return out;
     void trySyncOnce().catch(() => {});
-    return { ok: true, orderRef: offlineRefForClientOrderId(id) };
+    return { ok: true, orderRef: out.orderRef };
   });
 
   ipcMain.handle("khaanz:pos-list-recent-orders", async () => {
