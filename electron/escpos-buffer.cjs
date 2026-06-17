@@ -10,8 +10,11 @@ function toAsciiSafe(text) {
 
 /** Plain TEXT for WinSpool TEXT datatype (no ESC bytes). */
 function buildPlainTextBuffer(text) {
-  return Buffer.from(`${toAsciiSafe(text).trim()}\n\n\n`, "ascii");
+  return Buffer.from(`${toAsciiSafe(text).trim()}\n\n\n\n\n`, "ascii");
 }
+
+/** Trailing line feeds before cut — extra space after footer for easy tearing. */
+const ESCPOS_TAIL_FEED = Buffer.from([0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a]);
 
 /** ESC/POS for Generic/Text Only raw queues. */
 function buildEscPosBuffer(text) {
@@ -24,9 +27,9 @@ function buildEscPosBuffer(text) {
     chunks.push(Buffer.from([0x0a]));
   }
 
-  chunks.push(Buffer.from([0x0a, 0x0a, 0x0a]));
+  chunks.push(ESCPOS_TAIL_FEED);
   chunks.push(Buffer.from([0x1d, 0x56, 0x00]));
   return Buffer.concat(chunks);
 }
 
-module.exports = { buildEscPosBuffer, buildPlainTextBuffer, toAsciiSafe };
+module.exports = { buildEscPosBuffer, buildPlainTextBuffer, toAsciiSafe, ESCPOS_TAIL_FEED };

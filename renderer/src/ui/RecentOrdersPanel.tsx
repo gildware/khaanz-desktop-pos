@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Loader2Icon, MapPinIcon, MessageCircleIcon, NavigationIcon } from "lucide-react";
+import { Loader2Icon, MapPinIcon, MessageCircleIcon, NavigationIcon, PencilIcon } from "lucide-react";
 import {
   fulfillmentLabelFromKey,
   orderLinePayloadsToReceiptLines,
@@ -10,14 +10,16 @@ import {
 import { formatIstDateInput, isOrderOnIstDate, parseIstDateInput } from "../lib/ist-dates";
 import {
   countOrdersByStatus,
+  filterOrdersByFulfillment,
   filterOrdersByStatusTab,
   nextOrderStep,
   normalizeOrderStatus,
   ORDER_STATUS_LABEL,
   orderStatusBadgeClassName,
-  RESTAURANT_ORDER_STATUS_TAB_LABEL,
+  recentOrderStatusTabs,
   restaurantOrderStatusLabel,
   statusLabelFor,
+  type FulfillmentFilter,
 } from "../lib/order-status";
 import type { BillPrintLayout } from "../lib/bill-preview-settings";
 import {
@@ -28,6 +30,7 @@ import {
   resolveCustomerMapUrl,
 } from "../lib/order-location";
 import { openWhatsAppOrder } from "../lib/whatsapp";
+import { canEditOrder } from "../lib/order-edit";
 import type { PosSettings, RecentOrderRow } from "../types";
 import { OrderLineView } from "./OrderLineView";
 import {
@@ -42,14 +45,11 @@ type OrderView = "recent" | "online";
 
 type StatusFilter = "all" | string;
 
-const RECENT_STATUS_TABS: { id: StatusFilter; label: string }[] = [
+const RECENT_FULFILLMENT_TABS: { id: FulfillmentFilter; label: string }[] = [
   { id: "all", label: "All" },
-  { id: "PENDING", label: RESTAURANT_ORDER_STATUS_TAB_LABEL.PENDING },
-  { id: "ACCEPTED", label: RESTAURANT_ORDER_STATUS_TAB_LABEL.ACCEPTED },
-  { id: "PREPARING", label: RESTAURANT_ORDER_STATUS_TAB_LABEL.PREPARING },
-  { id: "OUT_FOR_DELIVERY", label: RESTAURANT_ORDER_STATUS_TAB_LABEL.OUT_FOR_DELIVERY },
-  { id: "DELIVERED", label: RESTAURANT_ORDER_STATUS_TAB_LABEL.DELIVERED },
-  { id: "CANCELLED", label: RESTAURANT_ORDER_STATUS_TAB_LABEL.CANCELLED },
+  { id: "pickup", label: "Pick Up" },
+  { id: "delivery", label: "Delivery" },
+  { id: "dine_in", label: "Dine In" },
 ];
 
 const ONLINE_STATUS_TABS: { id: StatusFilter; label: string }[] = [
@@ -94,6 +94,7 @@ type Props = {
   billPrintLayout?: BillPrintLayout;
   printerConnected?: boolean;
   apiOrigin?: string | null;
+  onEditOrder?: (order: RecentOrderRow) => void;
 };
 
 export function RecentOrdersPanel({
@@ -104,6 +105,7 @@ export function RecentOrdersPanel({
   billPrintLayout,
   printerConnected = false,
   apiOrigin = null,
+  onEditOrder,
 }: Props) {
   const api = window.posDesktop;
   const desktop = window.khaanzDesktop;
@@ -115,6 +117,7 @@ export function RecentOrdersPanel({
   const [initialLoad, setInitialLoad] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [orders, setOrders] = useState<RecentOrderRow[]>([]);
+  const [fulfillmentFilter, setFulfillmentFilter] = useState<FulfillmentFilter>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(() =>
     defaultStatusFilter(orderView),
   );
@@ -127,7 +130,10 @@ export function RecentOrdersPanel({
   const [printCooldownUntil, setPrintCooldownUntil] = useState<Record<string, number>>({});
   const [travelConfigured, setTravelConfigured] = useState(true);
 
-  const statusTabs = orderView === "online" ? ONLINE_STATUS_TABS : RECENT_STATUS_TABS;
+  const statusTabs =
+    orderView === "online"
+      ? ONLINE_STATUS_TABS
+      : recentOrderStatusTabs(fulfillmentFilter);
 
   const isOrderPrintOnCooldown = useCallback(
     (orderId: string) => {
@@ -238,7 +244,12 @@ export function RecentOrdersPanel({
 
   useEffect(() => {
     setStatusFilter(defaultStatusFilter(orderView));
+    setFulfillmentFilter("all");
   }, [orderView]);
+
+  useEffect(() => {
+    setStatusFilter("all");
+  }, [fulfillmentFilter]);
 
   useEffect(() => {
     void loadOrders();
@@ -260,14 +271,22 @@ export function RecentOrdersPanel({
     await loadOrders();
   }, [desktop, loadOrders]);
 
+  const fulfillmentOrders = useMemo(
+    () =>
+      orderView === "recent"
+        ? filterOrdersByFulfillment(orders, fulfillmentFilter)
+        : orders,
+    [orders, orderView, fulfillmentFilter],
+  );
+
   const statusCounts = useMemo(
-    () => countOrdersByStatus(orders),
-    [orders],
+    () => countOrdersByStatus(fulfillmentOrders),
+    [fulfillmentOrders],
   );
 
   const filteredOrders = useMemo(
-    () => filterOrdersByStatusTab(orders, statusFilter),
-    [orders, statusFilter],
+    () => filterOrdersByStatusTab(fulfillmentOrders, statusFilter),
+    [fulfillmentOrders, statusFilter],
   );
 
   const requestStatusChange = useCallback((payload: OrderStatusConfirmPayload) => {
@@ -481,7 +500,40 @@ export function RecentOrdersPanel({
         </div>
       </div>
 
-      <div className="flex shrink-0 gap-2 overflow-x-auto pb-1">
+      {orderView === "recent" ? (
+        <div className="my-1 flex shrink-0 gap-1 overflow-x-auto border-b pb-2">
+          {RECENT_FULFILLMENT_TABS.map((tab) => {
+            const count =
+              tab.id === "all"
+                ? orders.length
+                : filterOrdersByFulfillment(orders, tab.id).length;
+            const active = fulfillmentFilter === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setFulfillmentFilter(tab.id)}
+                className={`shrink-0 rounded-md px-3 py-1.5 font-medium text-sm ${
+                  active
+                    ? "bg-muted text-foreground shadow-sm ring-1 ring-border/80"
+                    : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                }`}
+              >
+                {tab.label}
+                <span
+                  className={`ml-1.5 rounded-full px-1.5 py-0.5 text-xs tabular-nums ${
+                    active ? "bg-background text-foreground" : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  {count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+
+      <div className="my-1 flex shrink-0 gap-2 overflow-x-auto pb-1">
         {statusTabs.map((tab) => {
           const count =
             tab.id === "all" ? statusCounts.total : (statusCounts.byStatus[tab.id] ?? 0);
@@ -524,6 +576,17 @@ export function RecentOrdersPanel({
               ? `No ${orderView === "online" ? "online" : ""} orders today.`
               : `No orders on ${orderDate}.`}
           </div>
+        ) : fulfillmentOrders.length === 0 ? (
+          <div className="rounded-2xl border border-dashed bg-muted/20 px-4 py-12 text-center text-muted-foreground text-sm">
+            No{" "}
+            {fulfillmentFilter === "pickup"
+              ? "pick up"
+              : fulfillmentFilter === "delivery"
+                ? "delivery"
+                : "dine-in"}{" "}
+            orders
+            {viewingToday ? " today" : ` on ${orderDate}`}.
+          </div>
         ) : filteredOrders.length === 0 ? (
           <div className="rounded-2xl border border-dashed bg-muted/20 px-4 py-12 text-center text-muted-foreground text-sm">
             No orders in this status
@@ -549,6 +612,10 @@ export function RecentOrdersPanel({
                 (o.status === "PENDING" ||
                   o.status === "ACCEPTED" ||
                   o.status === "OUT_FOR_DELIVERY");
+              const canEdit =
+                canEditOrder(o) &&
+                Boolean(onEditOrder) &&
+                Boolean(desktop?.placePosOrder);
               const coords = parseOrderCoords(o);
               const showLocation =
                 orderView === "online" && Boolean(o.address?.trim() || coords);
@@ -560,7 +627,7 @@ export function RecentOrdersPanel({
               return (
                 <article
                   key={o.id}
-                  className={`flex ${
+                  className={`relative flex ${
                     orderView === "online"
                       ? "h-[min(480px,52dvh)] min-h-[360px]"
                       : "h-[min(340px,42dvh)] min-h-[260px]"
@@ -754,7 +821,7 @@ export function RecentOrdersPanel({
                                 nextStatusLabel:
                                   orderView === "online"
                                     ? statusLabelFor("CANCELLED")
-                                    : RESTAURANT_ORDER_STATUS_TAB_LABEL.CANCELLED,
+                                    : restaurantOrderStatusLabel("CANCELLED", o.fulfillment),
                                 actionLabel: "Cancel order",
                                 destructive: true,
                               })
@@ -780,6 +847,18 @@ export function RecentOrdersPanel({
                       </button>
                     ) : null}
                   </footer>
+                  {canEdit ? (
+                    <button
+                      type="button"
+                      onClick={() => onEditOrder?.(o)}
+                      title="Edit order"
+                      aria-label="Edit order"
+                      className="absolute bottom-2 right-2 z-10 inline-flex h-6 items-center gap-0.5 rounded border border-primary/40 bg-card/95 px-1.5 text-[9px] font-medium text-primary shadow-sm backdrop-blur-sm hover:bg-primary/10"
+                    >
+                      <PencilIcon className="size-2.5" />
+                      Edit
+                    </button>
+                  ) : null}
                 </article>
               );
             })}

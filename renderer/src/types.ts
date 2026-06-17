@@ -386,9 +386,14 @@ export type KhaanzDesktopApi = {
     | { ok: true; id: string; status: string; statusLabel: string }
     | { ok: false; error: string }
   >;
+  updatePosOrder: (
+    orderId: string,
+    body: Record<string, unknown>,
+  ) => Promise<{ ok: true; orderRef: string } | { ok: false; error: string }>;
   placePosOrder: (
     clientOrderId: string,
     body: Record<string, unknown>,
+    isUpdate?: boolean,
   ) => Promise<{ ok: true; orderRef: string } | { ok: false; error: string }>;
   listPrinters: () => Promise<Array<{ name: string; isDefault?: boolean }>>;
   getSilentPrinter: () => Promise<{ deviceName: string }>;

@@ -67,6 +67,71 @@ export function normalizeOrderStatus(status: string): string {
   return upper;
 }
 
+export type FulfillmentFilter = "all" | "pickup" | "delivery" | "dine_in";
+
+export function normalizeFulfillment(fulfillment: string): string {
+  const key = String(fulfillment || "").trim().toLowerCase();
+  if (key === "dine_in" || key === "dine-in" || key === "dinein") return "dine_in";
+  if (key === "delivery") return "delivery";
+  if (key === "pickup" || key === "pick_up" || key === "pick-up") return "pickup";
+  return key || "pickup";
+}
+
+export function filterOrdersByFulfillment<T extends { fulfillment: string }>(
+  orders: T[],
+  tab: FulfillmentFilter,
+): T[] {
+  if (tab === "all") return orders;
+  return orders.filter((o) => normalizeFulfillment(o.fulfillment) === tab);
+}
+
+/** Tab label for a workflow status, scoped to fulfillment type. */
+export function restaurantStatusTabLabel(
+  status: string,
+  fulfillment: FulfillmentFilter,
+): string {
+  const fulfill = fulfillment === "all" ? "" : fulfillment;
+  switch (status) {
+    case "OUT_FOR_DELIVERY":
+      if (fulfill === "dine_in") return "Ready to serve";
+      if (fulfill === "pickup") return "Ready for pickup";
+      if (fulfill === "delivery") return ORDER_STATUS_LABEL.OUT_FOR_DELIVERY;
+      return RESTAURANT_ORDER_STATUS_TAB_LABEL.OUT_FOR_DELIVERY;
+    case "DELIVERED":
+      if (fulfill === "dine_in") return "Served";
+      if (fulfill === "pickup") return "Picked up";
+      if (fulfill === "delivery") return ORDER_STATUS_LABEL.DELIVERED;
+      return RESTAURANT_ORDER_STATUS_TAB_LABEL.DELIVERED;
+    default:
+      return (
+        RESTAURANT_ORDER_STATUS_TAB_LABEL[status] ??
+        ORDER_STATUS_LABEL[status] ??
+        status
+      );
+  }
+}
+
+const RECENT_WORKFLOW_STATUSES = [
+  "PENDING",
+  "ACCEPTED",
+  "PREPARING",
+  "OUT_FOR_DELIVERY",
+  "DELIVERED",
+  "CANCELLED",
+] as const;
+
+export function recentOrderStatusTabs(
+  fulfillment: FulfillmentFilter,
+): { id: string; label: string }[] {
+  return [
+    { id: "all", label: "All" },
+    ...RECENT_WORKFLOW_STATUSES.map((id) => ({
+      id,
+      label: restaurantStatusTabLabel(id, fulfillment),
+    })),
+  ];
+}
+
 export function filterOrdersByStatusTab<T extends { status: string }>(
   orders: T[],
   tab: string,
@@ -85,6 +150,12 @@ export function countOrdersByStatus(orders: { status: string }[]): {
     byStatus[key] = (byStatus[key] ?? 0) + 1;
   }
   return { total: orders.length, byStatus };
+}
+
+/** True when the order has reached a terminal workflow state. */
+export function isOrderEndState(status: string): boolean {
+  const normalized = normalizeOrderStatus(status);
+  return normalized === "DELIVERED" || normalized === "CANCELLED";
 }
 
 export function nextOrderStep(

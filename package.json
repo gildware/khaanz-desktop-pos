@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "concurrently -k -n renderer,electron -c cyan,green \"npm:dev:renderer\" \"npm:dev:electron\"",
     "dev:renderer": "npm --prefix renderer run dev",
-    "dev:electron": "wait-on tcp:127.0.0.1:5173 && electron .",
+    "dev:electron": "wait-on tcp:127.0.0.1:5173 && electron . --disable-gpu-sandbox",
     "rebuild:electron": "electron-rebuild -f -w better-sqlite3",
     "build": "npm run build:renderer",
     "build:renderer": "npm --prefix renderer run build",

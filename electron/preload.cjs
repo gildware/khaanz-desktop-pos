@@ -60,13 +60,15 @@ contextBridge.exposeInMainWorld("khaanzDesktop", {
   getSyncStatus: () => invoke("khaanz:sync-status"),
 
   // Desktop-only helpers used by the desktop POS fast-path.
-  placePosOrder: (clientOrderId, body) =>
-    invoke("khaanz:pos-place-order", { clientOrderId, body }),
+  placePosOrder: (clientOrderId, body, isUpdate) =>
+    invoke("khaanz:pos-place-order", { clientOrderId, body, isUpdate: Boolean(isUpdate) }),
   listRecentPosOrders: () => invoke("khaanz:pos-list-recent-orders"),
   listPosOrders: (opts) => invoke("khaanz:pos-list-orders", opts),
   getTodaySalesReport: () => invoke("khaanz:pos-today-report"),
   updatePosOrderStatus: (orderId, status) =>
     invoke("khaanz:pos-update-order-status", { orderId, status }),
+  updatePosOrder: (orderId, body) =>
+    invoke("khaanz:pos-place-order", { clientOrderId: orderId, body, isUpdate: true }),
   getBillPreviewSettings: () => invoke("khaanz:get-bill-preview-settings"),
   setBillPreviewSettings: (settings) =>
     invoke("khaanz:set-bill-preview-settings", { settings }),

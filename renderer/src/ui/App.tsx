@@ -38,6 +38,12 @@ import {
   printPosKotThermal,
 } from "../lib/pos-print";
 import { formatLastSyncAt } from "../lib/ist-dates";
+import {
+  type EditingOrder,
+  fulfillmentModeFromOrder,
+  minorToRupeeInput,
+  orderLinesToCart,
+} from "../lib/order-edit";
 import type {
   CartAddonWithQty,
   CartItemLine,
@@ -50,6 +56,7 @@ import type {
   MenuItem,
   MenuPayload,
   PosSettings,
+  RecentOrderRow,
   Session,
 } from "../types";
 import { BackendConnectionPanel } from "./BackendConnectionPanel";
@@ -228,6 +235,7 @@ export function App() {
   type SubmitMode = "save" | "kot" | "bill" | "both";
   const [submittingMode, setSubmittingMode] = useState<SubmitMode | null>(null);
   const [lastBill, setLastBill] = useState<{ orderRef: string } | null>(null);
+  const [editingOrder, setEditingOrder] = useState<EditingOrder | null>(null);
   const [printerDialogOpen, setPrinterDialogOpen] = useState(false);
   const [printerSaved, setPrinterSaved] = useState(false);
   const [printerConnected, setPrinterConnected] = useState(false);
@@ -810,10 +818,57 @@ export function App() {
     ],
   );
 
+  const startEditOrder = useCallback((order: RecentOrderRow) => {
+    const cartLines = orderLinesToCart(order.lines ?? []);
+    if (cartLines.length === 0) {
+      setError("This order has no editable items.");
+      return;
+    }
+    setCart(cartLines);
+    setFulfillment(fulfillmentModeFromOrder(order));
+    setCustomerName(order.customerName?.trim() || "");
+    setPhone(order.customerPhone?.trim() || "");
+    setAddress(order.address?.trim() || "");
+    setLandmark(order.landmark?.trim() || "");
+    setNotes(order.notes?.trim() || "");
+    setDiscountInput(minorToRupeeInput(order.discountMinor));
+    setDeliveryChargeInput(minorToRupeeInput(order.deliveryChargeMinor));
+    setPaymentStatus("unpaid");
+    setPaymentMethodKey("");
+    setEditingOrder({
+      id: order.id,
+      orderRef: order.orderRef ?? order.id.slice(0, 8).toUpperCase(),
+      source: order.source,
+      dineInTable: order.dineInTable?.trim() || undefined,
+    });
+    setMainTab("pos");
+    setError("");
+    setNotice(`Editing order ${order.orderRef ?? order.id.slice(0, 8)}`);
+  }, []);
+
+  const cancelEditOrder = useCallback(() => {
+    setEditingOrder(null);
+    setCart([]);
+    setNotes("");
+    setAddress("");
+    setLandmark("");
+    setDiscountInput("");
+    setDeliveryChargeInput("");
+    setCustomerName("");
+    setPhone("");
+    setNotice("");
+    setError("");
+  }, []);
+
   const submitPosOrder = useCallback(
     async (printMode: "none" | "kot" | "bill" | "both") => {
-      if (!session || !desktop?.placePosOrder) {
-        setError("Order save is not available.");
+      const isEditing = editingOrder !== null;
+      if (
+        !session ||
+        (!isEditing && !desktop?.placePosOrder) ||
+        (isEditing && !desktop?.placePosOrder)
+      ) {
+        setError(isEditing ? "Order update is not available." : "Order save is not available.");
         return;
       }
       if (cart.length === 0) {
@@ -845,7 +900,7 @@ export function App() {
       const header = posSettings?.billHeader ?? "";
       const footer = posSettings?.billFooter ?? "";
       const restaurantName = posSettings?.displayName || "Khaanz";
-      const clientOrderId = crypto.randomUUID();
+      const clientOrderId = isEditing ? editingOrder.id : crypto.randomUUID();
       const nameSnap = customerName.trim() || "Guest";
       const notesSnap = notes.trim();
       const phonePayload = phoneTrim ? normalizeIndianMobileDigits(phoneTrim) : "";
@@ -867,7 +922,7 @@ export function App() {
         latitude: null,
         longitude: null,
         paymentMethodKey: payKey,
-        tableId: "",
+        tableId: editingOrder?.dineInTable?.trim() || "",
         deliveryChargeMinor: totals.deliveryChargeCents,
         discountMinor: totals.discountCents,
       };
@@ -878,7 +933,9 @@ export function App() {
       setError("");
       setNotice("");
       try {
-        const placed = await desktop.placePosOrder(clientOrderId, orderPayload);
+        const placed = isEditing
+          ? await desktop.placePosOrder(editingOrder.id, orderPayload, true)
+          : await desktop.placePosOrder(clientOrderId, orderPayload);
         if (!placed.ok) {
           setError(placed.error);
           return;
@@ -895,15 +952,18 @@ export function App() {
           setLandmark("");
           setDiscountInput("");
           setDeliveryChargeInput("");
+          setEditingOrder(null);
         };
+
+        const actionWord = isEditing ? "updated" : "saved";
 
         if (printMode === "none") {
           clearOrderForm();
-          setNotice(`Order ${orderRef} saved`);
+          setNotice(`Order ${orderRef} ${actionWord}`);
           return;
         }
 
-        setNotice(`Order ${orderRef} saved — printing…`);
+        setNotice(`Order ${orderRef} ${actionWord} — printing…`);
         try {
           if (printMode === "kot" || printMode === "both") {
             await printPosKotThermal(
@@ -946,7 +1006,7 @@ export function App() {
             );
           }
           clearOrderForm();
-          setNotice(`Order ${orderRef} saved and sent to printer`);
+          setNotice(`Order ${orderRef} ${actionWord} and sent to printer`);
           setPrinterConnected(true);
           setPrinterReady(true);
           setPrinterSaved(true);
@@ -954,7 +1014,7 @@ export function App() {
         } catch (printErr) {
           clearOrderForm();
           const msg = printErr instanceof Error ? printErr.message : String(printErr);
-          setError(`Order ${orderRef} saved, but print failed: ${msg}`);
+          setError(`Order ${orderRef} ${actionWord}, but print failed: ${msg}`);
           void refreshPrinterStatus();
         }
       } catch (e) {
@@ -967,6 +1027,7 @@ export function App() {
       session,
       desktop,
       cart,
+      editingOrder,
       totals.total,
       paymentStatus,
       paymentMethodKey,
@@ -986,6 +1047,10 @@ export function App() {
   );
 
   const isSubmitting = submittingMode !== null;
+  const saveActionLabel = editingOrder ? "Update" : "Save";
+  const saveKotLabel = editingOrder ? "Update & KOT" : "Save & KOT";
+  const saveBillLabel = editingOrder ? "Update & Bill" : "Save & Bill";
+  const savePrintLabel = editingOrder ? "Update & Print" : "Save & Print";
 
   const printerHeaderLabel = printerConnected
     ? "Printer connected"
@@ -1304,6 +1369,7 @@ export function App() {
           posSettings={posSettings}
           billPrintLayout={billPrintLayout}
           printerConnected={printerConnected}
+          onEditOrder={startEditOrder}
         />
       ) : mainTab === "online-orders" ? (
         <RecentOrdersPanel
@@ -1314,6 +1380,7 @@ export function App() {
           billPrintLayout={billPrintLayout}
           printerConnected={printerConnected}
           apiOrigin={boot?.apiOrigin ?? null}
+          onEditOrder={startEditOrder}
         />
       ) : mainTab === "reports" ? (
         <ReportsPanel refreshKey={ordersRefreshKey} />
@@ -1357,6 +1424,22 @@ export function App() {
               Settings
             </button>
           </nav>
+
+          {editingOrder ? (
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-amber-500/40 bg-amber-500/10 px-3 py-2">
+              <p className="text-amber-950 text-xs dark:text-amber-50">
+                Editing order{" "}
+                <strong className="font-mono">{editingOrder.orderRef}</strong>
+              </p>
+              <button
+                type="button"
+                onClick={cancelEditOrder}
+                className="shrink-0 rounded-md border border-amber-600/40 px-2 py-1 text-[11px] font-medium text-amber-950 hover:bg-amber-500/15 dark:text-amber-50"
+              >
+                Cancel edit
+              </button>
+            </div>
+          ) : null}
 
           <div className="shrink-0 border-b bg-muted/30 p-3">
             <div className="relative">
@@ -1869,7 +1952,7 @@ export function App() {
                 {submittingMode === "save" ? (
                   <Loader2Icon className="size-3.5 animate-spin" />
                 ) : (
-                  "Save"
+                  saveActionLabel
                 )}
               </button>
               <button
@@ -1881,7 +1964,7 @@ export function App() {
                 {submittingMode === "kot" ? (
                   <Loader2Icon className="size-3.5 animate-spin" />
                 ) : (
-                  "Save & KOT"
+                  saveKotLabel
                 )}
               </button>
               <button
@@ -1893,7 +1976,7 @@ export function App() {
                 {submittingMode === "bill" ? (
                   <Loader2Icon className="size-3.5 animate-spin" />
                 ) : (
-                  "Save & Bill"
+                  saveBillLabel
                 )}
               </button>
               <button
@@ -1905,7 +1988,7 @@ export function App() {
                 {submittingMode === "both" ? (
                   <Loader2Icon className="size-3.5 animate-spin" />
                 ) : (
-                  "Save & Print"
+                  savePrintLabel
                 )}
               </button>
             </div>

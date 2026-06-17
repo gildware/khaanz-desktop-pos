@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CheckIcon, ImageIcon, Loader2Icon } from "lucide-react";
 import {
   BILL_LOGO_SIZE_MAX,
@@ -143,10 +143,13 @@ export function BillPreviewSettingsPanel({
   const [pickingLogo, setPickingLogo] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const skipAutoSaveRef = useRef(true);
+  const persistRef = useRef<(next: BillPreviewSettings) => Promise<void>>(async () => {});
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
+    skipAutoSaveRef.current = true;
     try {
       const r = await desktop.getBillPreviewSettings();
       if (!r.ok) {
@@ -158,6 +161,9 @@ export function BillPreviewSettingsPanel({
       setError(String(e instanceof Error ? e.message : e));
     } finally {
       setLoading(false);
+      window.setTimeout(() => {
+        skipAutoSaveRef.current = false;
+      }, 0);
     }
   }, [desktop]);
 
@@ -222,6 +228,16 @@ export function BillPreviewSettingsPanel({
     [desktop, onSaved],
   );
 
+  persistRef.current = persist;
+
+  useEffect(() => {
+    if (loading || skipAutoSaveRef.current) return;
+    const timer = window.setTimeout(() => {
+      void persistRef.current(settings);
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [settings, loading]);
+
   const update = (patch: Partial<BillPreviewSettings>) => {
     setSettings((prev) => normalizeBillPreviewSettings({ ...prev, ...patch }));
     setMessage("");
@@ -262,7 +278,7 @@ export function BillPreviewSettingsPanel({
   return (
     <div className="min-w-0 rounded-xl border p-4">
       <p className="mb-4 text-muted-foreground text-xs">
-        Theme, header fields, and footer notes for 80mm thermal bills. Previews update live.
+        Theme, header fields, and footer notes for 80mm thermal bills. Changes save automatically.
       </p>
 
       <div className="grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(280px,340px)] lg:items-start">

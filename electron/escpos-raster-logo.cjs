@@ -1,5 +1,5 @@
 const { nativeImage } = require("electron");
-const { toAsciiSafe } = require("./escpos-buffer.cjs");
+const { toAsciiSafe, ESCPOS_TAIL_FEED } = require("./escpos-buffer.cjs");
 
 /** ~203 DPI thermal — 8 dots per mm on 80mm paper. */
 const DOTS_PER_MM = 8;
@@ -32,8 +32,59 @@ function centerRasterHorizontally(raster, imageWidth, imageHeight, bytesPerRow) 
   };
 }
 
+function rowHasInk(raster, y, bytesPerRow) {
+  const start = y * bytesPerRow;
+  for (let i = 0; i < bytesPerRow; i++) {
+    if (raster[start + i]) return true;
+  }
+  return false;
+}
+
+/** Drop blank rows above/below the logo so thermal paper does not feed empty space. */
+function trimRasterVertical(raster, width, height, bytesPerRow) {
+  let top = 0;
+  let bottom = height - 1;
+  while (top < height && !rowHasInk(raster, top, bytesPerRow)) top++;
+  while (bottom >= top && !rowHasInk(raster, bottom, bytesPerRow)) bottom--;
+  if (top > bottom) {
+    return { raster: Buffer.alloc(0), width, height: 0, bytesPerRow };
+  }
+  const trimmedHeight = bottom - top + 1;
+  const trimmed = Buffer.alloc(bytesPerRow * trimmedHeight);
+  raster.copy(trimmed, 0, top * bytesPerRow, (bottom + 1) * bytesPerRow);
+  return { raster: trimmed, width, height: trimmedHeight, bytesPerRow };
+}
+
+function cropRgbaToInkBounds(width, height, rgba) {
+  let top = height;
+  let bottom = -1;
+  let left = width;
+  let right = -1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const gray = rgba[i] * 0.299 + rgba[i + 1] * 0.587 + rgba[i + 2] * 0.114;
+      const alpha = rgba[i + 3] / 255;
+      if (alpha > 0.15 && gray < 235) {
+        if (y < top) top = y;
+        if (y > bottom) bottom = y;
+        if (x < left) left = x;
+        if (x > right) right = x;
+      }
+    }
+  }
+  if (bottom < top || right < left) return null;
+  const cropW = right - left + 1;
+  const cropH = bottom - top + 1;
+  const cropped = Buffer.alloc(cropW * cropH * 4);
+  for (let y = 0; y < cropH; y++) {
+    const srcStart = ((top + y) * width + left) * 4;
+    rgba.copy(cropped, y * cropW * 4, srcStart, srcStart + cropW * 4);
+  }
+  return { width: cropW, height: cropH, rgba: cropped };
+}
+
 /**
- * Build ESC/POS GS v 0 raster strip from a data URL (PNG/JPEG/WebP).
  * Returns null when the image cannot be decoded.
  */
 function buildEscPosRasterFromDataUrl(dataUrl, maxWidthMm = 72, maxHeightMm = 45) {
@@ -46,13 +97,31 @@ function buildEscPosRasterFromDataUrl(dataUrl, maxWidthMm = 72, maxHeightMm = 45
   const size = img.getSize();
   if (!size.width || !size.height) return null;
 
+  let workImg = img;
+  const initialRgba = img.getBitmap();
+  if (initialRgba && initialRgba.length) {
+    const cropped = cropRgbaToInkBounds(size.width, size.height, initialRgba);
+    if (cropped) {
+      workImg = nativeImage.createFromBitmap(cropped.rgba, {
+        width: cropped.width,
+        height: cropped.height,
+      });
+    }
+  }
+
+  const workSize = workImg.getSize();
+  if (!workSize.width || !workSize.height) return null;
+
   const maxW = Math.max(8, Math.round(Number(maxWidthMm || 72) * DOTS_PER_MM));
   const maxH = Math.max(8, Math.round(Number(maxHeightMm || 45) * DOTS_PER_MM));
-  const scale = Math.min(maxW / size.width, maxH / size.height, 1);
-  const width = Math.max(1, Math.round(size.width * scale));
-  const height = Math.max(1, Math.round(size.height * scale));
+  const scale = Math.min(maxW / workSize.width, maxH / workSize.height, 1);
+  const width = Math.max(1, Math.round(workSize.width * scale));
+  const height = Math.max(1, Math.round(workSize.height * scale));
 
-  const resized = width === size.width && height === size.height ? img : img.resize({ width, height });
+  const resized =
+    width === workSize.width && height === workSize.height
+      ? workImg
+      : workImg.resize({ width, height });
   const rgba = resized.getBitmap();
   if (!rgba || !rgba.length) return null;
 
@@ -72,14 +141,23 @@ function buildEscPosRasterFromDataUrl(dataUrl, maxWidthMm = 72, maxHeightMm = 45
   }
 
   const centered = centerRasterHorizontally(raster, width, height, bytesPerRow);
-  const outWidth = centered.width;
-  const outBytesPerRow = centered.bytesPerRow;
-  const outRaster = centered.raster;
+  const trimmed = trimRasterVertical(
+    centered.raster,
+    centered.width,
+    height,
+    centered.bytesPerRow,
+  );
+  if (!trimmed.height) return null;
+
+  const outWidth = trimmed.width;
+  const outBytesPerRow = trimmed.bytesPerRow;
+  const outRaster = trimmed.raster;
+  const outHeight = trimmed.height;
 
   const xL = outBytesPerRow & 0xff;
   const xH = (outBytesPerRow >> 8) & 0xff;
-  const yL = height & 0xff;
-  const yH = (height >> 8) & 0xff;
+  const yL = outHeight & 0xff;
+  const yH = (outHeight >> 8) & 0xff;
 
   return Buffer.concat([
     Buffer.from([0x1d, 0x76, 0x30, 0x00, xL, xH, yL, yH]),
@@ -104,7 +182,7 @@ function buildEscPosReceiptWithLogo(text, logoDataUrl, dims = {}) {
     chunks.push(Buffer.from(line, "ascii"));
     chunks.push(Buffer.from([0x0a]));
   }
-  chunks.push(Buffer.from([0x0a, 0x0a, 0x0a]));
+  chunks.push(ESCPOS_TAIL_FEED);
   chunks.push(Buffer.from([0x1d, 0x56, 0x00]));
   return Buffer.concat(chunks);
 }

@@ -11,7 +11,9 @@ const {
 } = require("./thermal-print.cjs");
 const {
   getThermalPrintOptions,
+  getThermalPrintOptionsForContent,
   getPrintWindowSize,
+  measureReceiptContentHeightPx,
 } = require("./thermal-print-windows.cjs");
 const {
   resolveWindowsPrinterName,
@@ -284,6 +286,147 @@ function patchRemoteOrderStatus(db, orderId, status, statusLabel) {
   } catch {
     /* ignore */
   }
+}
+
+function patchRemoteOrderBody(db, orderId, body) {
+  const raw = readRemoteOrdersJson(db);
+  if (!raw || !body || typeof body !== "object") return;
+  try {
+    const orders = JSON.parse(raw);
+    if (!Array.isArray(orders)) return;
+    let changed = false;
+    const next = orders.map((o) => {
+      if (!o || typeof o !== "object") return o;
+      const id = o.id || o.clientOrderId;
+      if (String(id) !== String(orderId)) return o;
+      changed = true;
+      const lines = Array.isArray(body.lines)
+        ? body.lines.map((payload, sortIndex) => ({ sortIndex, payload }))
+        : o.lines;
+      const totalMinor = computeOfflineOrderTotalMinor({ ...body, lines: body.lines });
+      return {
+        ...o,
+        customerName:
+          typeof body.customerName === "string" ? body.customerName : o.customerName,
+        customerPhone: typeof body.phone === "string" ? body.phone : o.customerPhone,
+        fulfillment:
+          typeof body.fulfillment === "string" ? body.fulfillment : o.fulfillment,
+        notes: typeof body.notes === "string" ? body.notes : o.notes,
+        address: typeof body.address === "string" ? body.address : o.address,
+        landmark: typeof body.landmark === "string" ? body.landmark : o.landmark,
+        deliveryChargeMinor:
+          typeof body.deliveryChargeMinor === "number"
+            ? body.deliveryChargeMinor
+            : o.deliveryChargeMinor,
+        discountMinor:
+          typeof body.discountMinor === "number" ? body.discountMinor : o.discountMinor,
+        dineInTable: typeof body.tableId === "string" ? body.tableId : o.dineInTable,
+        lines,
+        totalMinor,
+      };
+    });
+    if (changed) writeRemoteOrdersJson(db, JSON.stringify(next));
+  } catch {
+    /* ignore */
+  }
+}
+
+async function updatePosOrderMain(orderId, body) {
+  const id = String(orderId || "").trim();
+  if (!id) return { ok: false, error: "Missing order id" };
+  if (!body || typeof body !== "object") return { ok: false, error: "Invalid order body" };
+
+  const apiOrigin = (process.env.KHAANZ_API_ORIGIN || "").trim();
+  const syncKey = (process.env.KHAANZ_SYNC_KEY || "").trim();
+  const deviceId = getOrCreateDeviceId(db);
+
+  async function putOrderToServer() {
+    if (!apiOrigin || !syncKey) {
+      return {
+        ok: false,
+        error: "Cannot update order offline. Configure KHAANZ_API_ORIGIN and KHAANZ_SYNC_KEY.",
+        offline: true,
+      };
+    }
+
+    const resp = await fetchJson(
+      `${apiOrigin.replace(/\/$/, "")}/api/pos-sync/orders/${encodeURIComponent(id)}`,
+      {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          "x-pos-device-id": deviceId,
+          "x-pos-sync-key": syncKey,
+        },
+        body: JSON.stringify(body),
+      },
+    );
+
+    if (!resp.ok) {
+      const err =
+        resp.json && resp.json.error
+          ? String(resp.json.error)
+          : `HTTP ${resp.status || "error"}`;
+      return { ok: false, error: err, status: resp.status || 0 };
+    }
+
+    patchRemoteOrderBody(db, id, body);
+
+    const orderRef =
+      resp.json?.orderRef != null
+        ? String(resp.json.orderRef)
+        : resp.json?.id != null
+          ? String(resp.json.id).slice(0, 8).toUpperCase()
+          : id.slice(0, 8).toUpperCase();
+
+    return { ok: true, orderRef };
+  }
+
+  function clearOfflineOrderEntry() {
+    try {
+      db.prepare("DELETE FROM offline_pos_queue WHERE client_order_id=?").run(id);
+      db.prepare("UPDATE sync_outbox SET sent_at=? WHERE id=?").run(nowIso(), `pos_evt_${id}`);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const offlineRow = db
+    .prepare(
+      "SELECT client_order_id AS clientOrderId FROM offline_pos_queue WHERE client_order_id=?",
+    )
+    .get(id);
+
+  if (offlineRow && apiOrigin && syncKey) {
+    const remote = await putOrderToServer();
+    if (remote.ok) {
+      clearOfflineOrderEntry();
+      void trySyncOnce().catch(() => {});
+      return remote;
+    }
+    if (remote.status === 404) {
+      const payload = { ...body, clientOrderId: id };
+      const out = enqueueOfflinePosOrder(id, payload);
+      if (!out.ok) return out;
+      void trySyncOnce().catch(() => {});
+      return { ok: true, orderRef: offlineRefForClientOrderId(id) };
+    }
+    return { ok: false, error: remote.error };
+  }
+
+  if (offlineRow) {
+    const payload = { ...body, clientOrderId: id };
+    const out = enqueueOfflinePosOrder(id, payload);
+    if (!out.ok) return out;
+    void trySyncOnce().catch(() => {});
+    return { ok: true, orderRef: offlineRefForClientOrderId(id) };
+  }
+
+  const remote = await putOrderToServer();
+  if (!remote.ok) {
+    return { ok: false, error: remote.error };
+  }
+  return remote;
 }
 
 function readSettingsJson(db) {
@@ -906,6 +1049,8 @@ function writeSettingsJson(db, payloadJson) {
 }
 
 const BILL_PREVIEW_META_KEY = "bill_preview_settings";
+/** Set when the cashier saves bill layout locally — blocks server sync from overwriting. */
+const BILL_PREVIEW_LOCAL_AT_KEY = "bill_preview_local_at";
 /** Max local bill logo file size (5 MB). */
 const BILL_LOGO_MAX_BYTES = 5 * 1024 * 1024;
 
@@ -949,6 +1094,27 @@ function writeBillPreviewSettingsJson(db, payloadJson) {
     BILL_PREVIEW_META_KEY,
     payloadJson,
   );
+}
+
+function readBillPreviewLocalAt(db) {
+  try {
+    const row = db.prepare("SELECT value FROM meta WHERE key=?").get(BILL_PREVIEW_LOCAL_AT_KEY);
+    return row && typeof row.value === "string" ? row.value.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+function writeBillPreviewLocalAt(db) {
+  db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)").run(
+    BILL_PREVIEW_LOCAL_AT_KEY,
+    nowIso(),
+  );
+}
+
+function shouldSeedBillPreviewFromServer(db) {
+  if (readBillPreviewLocalAt(db)) return false;
+  return !readBillPreviewSettingsJson(db).trim();
 }
 
 function defaultPosSettings() {
@@ -1853,18 +2019,35 @@ async function printSilentHtml({ html, title }) {
 
         const needsVisualPrint = await receiptDocumentNeedsVisualPrint(win.webContents);
         if (needsVisualPrint) {
-          const visual = await printWebContentsAsync(
-            win.webContents,
-            getThermalPrintOptions(chosen, { withImages: true }),
-            30_000,
-          );
+          const printOptions = await getThermalPrintOptionsForContent(win.webContents, chosen, {
+            withImages: true,
+          });
+          const visual = await printWebContentsAsync(win.webContents, printOptions, 30_000);
           if (visual.ok) {
-            writeSilentPrinterNameToDb(db, chosen);
-            setPrinterVerified(db, chosen);
-            settle(visual);
-            return;
+            const hasInk = await win.webContents
+              .executeJavaScript(
+                `(() => {
+                  const t = (document.body && document.body.innerText) ? document.body.innerText.trim() : "";
+                  const imgs = document.querySelectorAll(".thermal-receipt-root img, img.logo");
+                  return t.length > 20 || imgs.length > 0;
+                })()`,
+              )
+              .catch(() => true);
+            if (hasInk) {
+              writeSilentPrinterNameToDb(db, chosen);
+              setPrinterVerified(db, chosen);
+              settle(visual);
+              return;
+            }
+            appendPrintLog({
+              event: "print-fallback",
+              platform: process.platform,
+              method: "visual-empty",
+              printer: chosen,
+              error: "Visual print produced no text — falling back to plain text.",
+            });
           }
-          /* Image print failed — fall back to plain text so the bill still prints. */
+          /* Image print failed or blank — fall back to plain text so the bill still prints. */
         }
 
         const r = await printLoadedReceiptPlainText(win.webContents, chosen, safeTitle);
@@ -2065,6 +2248,7 @@ function createMainWindow() {
     minWidth: 900,
     minHeight: 600,
     title: "Khaanz POS",
+    show: false,
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -2078,6 +2262,11 @@ function createMainWindow() {
 
   hardenWindowNavigation(win);
   win.setMenuBarVisibility(false);
+  win.once("ready-to-show", () => {
+    win.center();
+    win.show();
+    win.focus();
+  });
 
   if (isDev) {
     const url = process.env.POS_DESKTOP_RENDERER_URL || "http://127.0.0.1:5173";
@@ -2212,19 +2401,8 @@ async function pullSyncFromServer() {
     if (pull.json.settings) {
       writeSettingsJson(db, JSON.stringify(pull.json.settings));
       const synced = pull.json.settings;
-      if (synced.billPreview && typeof synced.billPreview === "object") {
-        let localLogo = "";
-        try {
-          const prevRaw = readBillPreviewSettingsJson(db);
-          const prev = prevRaw ? JSON.parse(prevRaw) : null;
-          if (prev && typeof prev.logoDataUrl === "string" && prev.logoDataUrl.trim()) {
-            localLogo = prev.logoDataUrl.trim();
-          }
-        } catch {
-          /* keep server bill preview */
-        }
+      if (synced.billPreview && typeof synced.billPreview === "object" && shouldSeedBillPreviewFromServer(db)) {
         const merged = { ...defaultBillPreviewSettings(), ...synced.billPreview };
-        if (localLogo) merged.logoDataUrl = localLogo;
         writeBillPreviewSettingsJson(db, JSON.stringify(merged));
       }
     }
@@ -2517,6 +2695,7 @@ function registerIpc() {
       }
     }
     writeBillPreviewSettingsJson(db, JSON.stringify(merged));
+    writeBillPreviewLocalAt(db);
     return { ok: true, settings: merged };
   });
 
@@ -2769,8 +2948,11 @@ function registerIpc() {
     }
   });
 
-  ipcMain.handle("khaanz:pos-place-order", async (_evt, { clientOrderId, body }) => {
+  ipcMain.handle("khaanz:pos-place-order", async (_evt, { clientOrderId, body, isUpdate }) => {
     const id = typeof clientOrderId === "string" ? clientOrderId.trim() : "";
+    if (isUpdate) {
+      return updatePosOrderMain(id, body);
+    }
     const out = enqueueOfflinePosOrder(id, body);
     if (!out.ok) return out;
     void trySyncOnce().catch(() => {});
@@ -2955,6 +3137,10 @@ function registerIpc() {
       return { ok: false, error: String(e && e.message ? e.message : e) };
     }
   });
+
+  ipcMain.handle("khaanz:pos-update-order", async (_evt, { orderId, body }) =>
+    updatePosOrderMain(orderId, body),
+  );
 
   ipcMain.handle("khaanz:pos-update-order-status", async (_evt, { orderId, status }) => {
     const apiOrigin = (process.env.KHAANZ_API_ORIGIN || "").trim();
@@ -3244,8 +3430,15 @@ app.whenReady().then(() => {
     if (BrowserWindow.getAllWindows().length === 0) {
       mainWindow = createMainWindow();
       initAutoUpdater(mainWindow, { isDev });
+    } else if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+      mainWindow.focus();
     }
   });
+}).catch((err) => {
+  console.error("[electron] startup failed:", err);
+  dialog.showErrorBox("Khaanz POS failed to start", String(err?.message || err));
+  app.quit();
 });
 
 ipcMain.handle("app:check-for-updates", async () => {

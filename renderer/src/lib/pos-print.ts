@@ -176,6 +176,7 @@ function buildThermalStyle(layout?: BillPrintLayout): string {
   const bodySize = layout?.bodySizePx ?? 12;
   const lineHeight = layout?.lineHeight ?? 1.4;
   const pad = layout?.receiptPaddingPx ?? 8;
+  const bottomPad = pad + 28;
   const align = layout?.headerAlign ?? "center";
   const r = ".thermal-receipt-root";
   return `
@@ -189,7 +190,7 @@ function buildThermalStyle(layout?: BillPrintLayout): string {
     font-weight: ${weight};
     line-height: ${lineHeight};
     margin: 0;
-    padding: 0 2px ${pad}px;
+    padding: 0 2px ${bottomPad}px;
     width: 100%;
     max-width: 80mm;
     background: #fff;
@@ -204,11 +205,10 @@ function buildThermalStyle(layout?: BillPrintLayout): string {
     print-color-adjust: exact;
   }
   ${r} .bill-receipt { width: 100%; }
-  ${r} .logo-wrap { text-align: center; margin: 0 auto 4px; width: 100%; }
+  ${r} .logo-wrap { text-align: center; margin: 0 auto 2px; width: 100%; line-height: 0; }
   ${r} .logo-wrap img.logo {
     display: block;
-    margin-left: auto;
-    margin-right: auto;
+    margin: 0 auto;
     max-width: ${logoW}mm;
     max-height: ${logoH}mm;
     width: auto;
@@ -249,6 +249,7 @@ function buildThermalStyle(layout?: BillPrintLayout): string {
   ${r} .grand-total { display: flex; justify-content: space-between; align-items: baseline; font-size: ${grandSize}px; font-weight: ${weightNum + 100}; margin: 8px 0 4px; white-space: nowrap; }
   ${r} .grand-total span { white-space: nowrap; }
   ${r} .payment-status { font-size: 11px; margin: 4px 0; }
+  ${r} .receipt-tail { height: 24px; }
   ${r} tr.addon-line td { font-size: 10px; line-height: 1.3; }
   ${r} tr.addon-line .iname { padding-left: 8px; }
   ${r} h1 { font-size: 16px; margin: 0 0 8px; text-align: center; }
@@ -543,6 +544,8 @@ export function buildBillPlainText(o: PosBillPrintOptions): string {
   }
   if (o.notes.trim()) lines.push(`Note: ${o.notes.trim()}`.slice(0, PLAIN_WIDTH));
   lines.push("");
+  lines.push("");
+  lines.push("");
   return lines.join("\n");
 }
 
@@ -690,6 +693,7 @@ ${extraTotals.join("")}
 <div class="payment-status">${escapeHtml(payStatus)}</div>
 ${customFooterHtml}
 ${o.notes.trim() ? `<div class="muted">Note: ${escapeHtml(o.notes.trim())}</div>` : ""}
+<div class="receipt-tail" aria-hidden="true"></div>
 </div>
 `;
 }
@@ -924,6 +928,8 @@ export async function printPosBillThermal(
   const printOptions = receiptPrintOptionsFromLayout(options.layout);
   const hasLogo = Boolean(printOptions?.logoDataUrl);
   const plainText = buildBillPlainText(options);
+  const htmlDoc = buildBillPreviewDocument(options);
+  const htmlTimeout = hasLogo ? PRINT_IPC_TIMEOUT_WITH_LOGO_MS : PRINT_IPC_TIMEOUT_MS;
 
   if (desktop.printReceiptText) {
     try {
@@ -932,11 +938,7 @@ export async function printPosBillThermal(
     } catch (primaryErr) {
       if (!hasLogo || !desktop.printSilentHtml) throw primaryErr;
       try {
-        await sendHtmlReceiptToDesktop(
-          desktop,
-          buildBillPreviewDocument(options),
-          "Bill",
-        );
+        await sendHtmlReceiptToDesktop(desktop, htmlDoc, "Bill", htmlTimeout);
         return;
       } catch (htmlErr) {
         const primaryMsg =
@@ -949,12 +951,7 @@ export async function printPosBillThermal(
     }
   }
 
-  await sendHtmlReceiptToDesktop(
-    desktop,
-    buildBillPreviewDocument(options),
-    "Bill",
-    hasLogo ? PRINT_IPC_TIMEOUT_WITH_LOGO_MS : PRINT_IPC_TIMEOUT_MS,
-  );
+  await sendHtmlReceiptToDesktop(desktop, htmlDoc, "Bill", htmlTimeout);
 }
 
 export async function printPosKotThermal(
