@@ -2,7 +2,8 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- No viewport meta: in packaged Electron (file://) device-width is the monitor,
+         not the window, which scales the whole UI down vs the Vite dev server. -->
     <title>Khaanz POS</title>
   </head>
   <body>

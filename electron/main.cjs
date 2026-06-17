@@ -2395,6 +2395,16 @@ function buildMenuPayloadFromLocalMenuItems(db) {
   };
 }
 
+function normalizeRendererUiScale(win) {
+  const wc = win.webContents;
+  wc.setVisualZoomLevelLimits(1, 1);
+  wc.setZoomFactor(1);
+  wc.on("did-finish-load", () => {
+    wc.setVisualZoomLevelLimits(1, 1);
+    wc.setZoomFactor(1);
+  });
+}
+
 function createMainWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -2415,6 +2425,7 @@ function createMainWindow() {
   });
 
   hardenWindowNavigation(win);
+  normalizeRendererUiScale(win);
   win.setMenuBarVisibility(false);
   win.once("ready-to-show", () => {
     win.center();

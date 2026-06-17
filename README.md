@@ -44,6 +44,8 @@ npm run build:renderer && npm run start:dist
 
 If the window looks unstyled, rebuild the renderer — production builds must not use `crossorigin` on assets (fixed in `renderer/vite.config.ts`).
 
+If the packaged app UI looks smaller than dev (zoomed out), rebuild the renderer after updating — the HTML must not include a mobile `viewport` meta tag (see `renderer/index.html`).
+
 If the app fails to start with a native-module error after `npm install`, rebuild SQLite for Electron:
 
 ```bash
