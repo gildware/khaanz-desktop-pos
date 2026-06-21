@@ -60,6 +60,10 @@ import type {
   Session,
 } from "../types";
 import { BackendConnectionPanel } from "./BackendConnectionPanel";
+import {
+  DeliveryCustomerPhoneInput,
+  type DeliveryCustomerSuggestion,
+} from "./DeliveryCustomerPhoneInput";
 import { ItemConfigureDialog } from "./ItemConfigureDialog";
 import { OpenItemDialog } from "./OpenItemDialog";
 import { PrinterDialog } from "./PrinterDialog";
@@ -507,6 +511,16 @@ export function App() {
       total: bill.total,
     };
   }, [cart, fulfillment, deliveryChargeInput, discountInput]);
+
+  const fetchDeliveryCustomers = useCallback(
+    async (query: string): Promise<DeliveryCustomerSuggestion[]> => {
+      if (!desktop?.searchDeliveryCustomers) return [];
+      const r = await desktop.searchDeliveryCustomers(query);
+      if (!r.ok) return [];
+      return r.customers;
+    },
+    [desktop],
+  );
 
   const addItemLine = useCallback(
     (item: MenuItem, variation: MenuItem["variations"][number], addons: CartAddonWithQty[]) => {
@@ -1696,16 +1710,32 @@ export function App() {
                   autoComplete="name"
                   className="h-8 rounded border bg-white px-2 text-sm"
                 />
-                <input
-                  id="pos-phone"
-                  type="tel"
-                  inputMode="numeric"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 10))}
-                  placeholder="Phone"
-                  autoComplete="tel"
-                  className="h-8 rounded border bg-white px-2 text-sm"
-                />
+                {fulfillment === "delivery" ? (
+                  <DeliveryCustomerPhoneInput
+                    id="pos-phone"
+                    phone={phone}
+                    enabled={fulfillment === "delivery"}
+                    onPhoneChange={setPhone}
+                    fetchSuggestions={fetchDeliveryCustomers}
+                    onSelectCustomer={(c) => {
+                      setPhone(c.phoneDigits);
+                      setCustomerName(c.displayName);
+                      if (c.address) setAddress(c.address);
+                      if (c.landmark) setLandmark(c.landmark);
+                    }}
+                  />
+                ) : (
+                  <input
+                    id="pos-phone"
+                    type="tel"
+                    inputMode="numeric"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 10))}
+                    placeholder="Phone"
+                    autoComplete="tel"
+                    className="h-8 rounded border bg-white px-2 text-sm"
+                  />
+                )}
               </div>
               {fulfillment === "delivery" ? (
                 <>

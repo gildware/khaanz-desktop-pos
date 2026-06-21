@@ -67,6 +67,8 @@ contextBridge.exposeInMainWorld("khaanzDesktop", {
   listRecentPosOrders: () => invoke("khaanz:pos-list-recent-orders"),
   listPosOrders: (opts) => invoke("khaanz:pos-list-orders", opts),
   getTodaySalesReport: () => invoke("khaanz:pos-today-report"),
+  searchDeliveryCustomers: (query) =>
+    invoke("khaanz:pos-search-delivery-customers", { query }),
   updatePosOrderStatus: (orderId, status) =>
     invoke("khaanz:pos-update-order-status", { orderId, status }),
   updatePosOrder: (orderId, body) =>
