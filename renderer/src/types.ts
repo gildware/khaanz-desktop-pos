@@ -382,6 +382,18 @@ export type KhaanzDesktopApi = {
   getTodaySalesReport: () => Promise<
     { ok: true; report: TodaySalesReport } | { ok: false; error: string }
   >;
+  searchDeliveryCustomers: (query: string) => Promise<
+    | {
+        ok: true;
+        customers: Array<{
+          phoneDigits: string;
+          displayName: string;
+          address: string;
+          landmark: string;
+        }>;
+      }
+    | { ok: false; error: string }
+  >;
   updatePosOrderStatus: (
     orderId: string,
     status: string,

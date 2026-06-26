@@ -833,6 +833,97 @@ function readCachedRemoteOrders() {
   }
 }
 
+const POS_ANONYMOUS_PHONE_DIGITS = "6000000000";
+
+function normalizeIndianPhoneDigits(phone) {
+  const d = String(phone || "").replace(/\D/g, "");
+  if (d.length === 12 && d.startsWith("91")) return d.slice(2);
+  if (d.length === 11 && d.startsWith("0")) return d.slice(1);
+  return d;
+}
+
+function matchesDeliveryCustomerQuery(row, query) {
+  const q = String(query || "").trim();
+  if (!q) return true;
+  const phoneQ = normalizeIndianPhoneDigits(q);
+  const name = String(row.displayName || "").toLowerCase();
+  const digits = String(row.phoneDigits || "");
+  if (phoneQ && digits.startsWith(phoneQ)) return true;
+  if (/[a-zA-Z]/.test(q) && q.length >= 2 && name.includes(q.toLowerCase())) return true;
+  return false;
+}
+
+function searchLocalDeliveryCustomers(query) {
+  const byPhone = new Map();
+
+  function addCandidate(phone, name, address, landmark, createdAt) {
+    const phoneDigits = normalizeIndianPhoneDigits(phone);
+    if (!phoneDigits || phoneDigits === POS_ANONYMOUS_PHONE_DIGITS) return;
+    const row = {
+      phoneDigits,
+      displayName: String(name || "").trim() || "Guest",
+      address: String(address || "").trim(),
+      landmark: String(landmark || "").trim(),
+      createdAt: createdAt ? String(createdAt) : "",
+    };
+    if (!matchesDeliveryCustomerQuery(row, query)) return;
+    const prev = byPhone.get(phoneDigits);
+    if (!prev || String(row.createdAt) > String(prev.createdAt)) {
+      byPhone.set(phoneDigits, row);
+    }
+  }
+
+  for (const o of readCachedRemoteOrders()) {
+    if (!o || typeof o !== "object") continue;
+    if (String(o.fulfillment || "") !== "delivery") continue;
+    addCandidate(
+      o.customerPhone,
+      o.customerName,
+      o.address || "",
+      o.landmark || "",
+      o.createdAt,
+    );
+  }
+
+  try {
+    const offlineRows = db
+      .prepare(
+        "SELECT body_json AS bodyJson, created_at AS createdAt FROM offline_pos_queue ORDER BY created_at DESC LIMIT 100",
+      )
+      .all();
+    for (const row of offlineRows) {
+      if (!row || !row.bodyJson) continue;
+      let body;
+      try {
+        body = JSON.parse(row.bodyJson);
+      } catch {
+        continue;
+      }
+      if (!body || typeof body !== "object") continue;
+      if (String(body.fulfillment || "") !== "delivery") continue;
+      addCandidate(
+        body.phone,
+        body.customerName,
+        body.address,
+        body.landmark,
+        row.createdAt,
+      );
+    }
+  } catch {
+    /* ignore */
+  }
+
+  return [...byPhone.values()]
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+    .slice(0, 12)
+    .map(({ phoneDigits, displayName, address, landmark }) => ({
+      phoneDigits,
+      displayName,
+      address,
+      landmark,
+    }));
+}
+
 function formatIstHourLabel(hour) {
   const h = ((Number(hour) % 24) + 24) % 24;
   if (h === 0) return "12 AM";
@@ -3309,6 +3400,51 @@ function registerIpc() {
 
     try {
       return { ok: true, report: buildLocalTodayReport(db) };
+    } catch (e) {
+      return { ok: false, error: String(e && e.message ? e.message : e) };
+    }
+  });
+
+  ipcMain.handle("khaanz:pos-search-delivery-customers", async (_evt, { query }) => {
+    const q = typeof query === "string" ? query : "";
+    const apiOrigin = (process.env.KHAANZ_API_ORIGIN || "").trim();
+    const syncKey = (process.env.KHAANZ_SYNC_KEY || "").trim();
+    const deviceId = getOrCreateDeviceId(db);
+
+    let remoteCustomers = null;
+    if (apiOrigin && syncKey) {
+      const params = new URLSearchParams({ q });
+      const resp = await fetchJson(
+        `${apiOrigin.replace(/\/$/, "")}/api/pos-sync/delivery-customers?${params.toString()}`,
+        {
+          method: "GET",
+          headers: {
+            "x-pos-device-id": deviceId,
+            "x-pos-sync-key": syncKey,
+          },
+        },
+      );
+      if (resp.ok && resp.json && Array.isArray(resp.json.customers)) {
+        remoteCustomers = resp.json.customers;
+      }
+    }
+
+    try {
+      const localCustomers = searchLocalDeliveryCustomers(q);
+      if (remoteCustomers) {
+        const byPhone = new Map();
+        for (const row of localCustomers) {
+          if (row && row.phoneDigits) byPhone.set(row.phoneDigits, row);
+        }
+        for (const row of remoteCustomers) {
+          if (row && row.phoneDigits) byPhone.set(row.phoneDigits, row);
+        }
+        return {
+          ok: true,
+          customers: [...byPhone.values()].slice(0, 12),
+        };
+      }
+      return { ok: true, customers: localCustomers };
     } catch (e) {
       return { ok: false, error: String(e && e.message ? e.message : e) };
     }
