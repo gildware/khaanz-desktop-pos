@@ -3411,6 +3411,7 @@ function registerIpc() {
     const syncKey = (process.env.KHAANZ_SYNC_KEY || "").trim();
     const deviceId = getOrCreateDeviceId(db);
 
+    let remoteCustomers = null;
     if (apiOrigin && syncKey) {
       const params = new URLSearchParams({ q });
       const resp = await fetchJson(
@@ -3424,12 +3425,26 @@ function registerIpc() {
         },
       );
       if (resp.ok && resp.json && Array.isArray(resp.json.customers)) {
-        return { ok: true, customers: resp.json.customers };
+        remoteCustomers = resp.json.customers;
       }
     }
 
     try {
-      return { ok: true, customers: searchLocalDeliveryCustomers(q) };
+      const localCustomers = searchLocalDeliveryCustomers(q);
+      if (remoteCustomers) {
+        const byPhone = new Map();
+        for (const row of localCustomers) {
+          if (row && row.phoneDigits) byPhone.set(row.phoneDigits, row);
+        }
+        for (const row of remoteCustomers) {
+          if (row && row.phoneDigits) byPhone.set(row.phoneDigits, row);
+        }
+        return {
+          ok: true,
+          customers: [...byPhone.values()].slice(0, 12),
+        };
+      }
+      return { ok: true, customers: localCustomers };
     } catch (e) {
       return { ok: false, error: String(e && e.message ? e.message : e) };
     }

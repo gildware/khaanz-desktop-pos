@@ -1699,7 +1699,7 @@ export function App() {
 
           {/* Customer / adjustments (collapsible) */}
           {customerDetailsOpen ? (
-            <div className="shrink-0 space-y-2.5 border-b bg-zinc-50 px-3 py-2.5">
+            <div className="relative z-30 shrink-0 space-y-2.5 border-b bg-zinc-50 px-3 py-2.5">
               <div className="grid grid-cols-2 gap-2">
                 <input
                   id="pos-name"
